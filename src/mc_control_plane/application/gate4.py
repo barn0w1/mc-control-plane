@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from time import monotonic, sleep
 from typing import Any, cast
@@ -149,6 +149,8 @@ def run_gate4_data_lifecycle(
     )
     if _content_hash(restored_initial) != initial_hash:
         raise Gate4Error("first fresh Host restore did not reproduce the initial fixture")
+    _mark_snapshot_verified(unit_of_work, first_id, server_unit_id, clock)
+    report(f"snapshot independently verified: snapshot={first_id} run={run2}")
     modified = _command(
         store,
         agent2,
@@ -219,6 +221,8 @@ def run_gate4_data_lifecycle(
     )
     if _content_hash(restored_modified) != modified_hash:
         raise Gate4Error("second fresh Host restore did not reproduce the modified fixture")
+    _mark_snapshot_verified(unit_of_work, second_id, server_unit_id, clock)
+    report(f"snapshot independently verified: snapshot={second_id} run={run3}")
     _cleanup(
         unit_of_work,
         provider,
@@ -328,14 +332,29 @@ def _commit_snapshot(
     unit_of_work: UnitOfWorkFactory,
     snapshot_id: str,
     server_unit_id: str,
-    run_id: str,
+    run_id: str | None,
     clock: Clock,
 ) -> None:
     now = clock.now()
     with unit_of_work() as work:
         work.snapshots.add(
-            Snapshot(snapshot_id, server_unit_id, run_id, SnapshotKind.MANUAL, now, now)
+            Snapshot(snapshot_id, server_unit_id, run_id, SnapshotKind.MANUAL, now, None)
         )
+        work.commit()
+
+
+def _mark_snapshot_verified(
+    unit_of_work: UnitOfWorkFactory,
+    snapshot_id: str,
+    server_unit_id: str,
+    clock: Clock,
+) -> None:
+    with unit_of_work() as work:
+        snapshot = work.snapshots.get(snapshot_id)
+        if snapshot is None or snapshot.server_unit_id != server_unit_id:
+            raise Gate4Error("restored snapshot is not owned by the Server Unit")
+        if snapshot.verified_at is None:
+            work.snapshots.save(replace(snapshot, verified_at=clock.now()))
         work.commit()
 
 

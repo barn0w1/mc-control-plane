@@ -1,8 +1,12 @@
 from datetime import UTC, datetime, timedelta
 
 from mc_control_plane.adapters.inbound.host_api import HostApiApplication
-from mc_control_plane.adapters.outbound.persistence import HostProtocolStore, SQLiteDatabase
-from mc_control_plane.application.data_lease import ResticDataLease
+from mc_control_plane.adapters.outbound.persistence import (
+    HostProtocolStore,
+    HostStoreUnavailable,
+    SQLiteDatabase,
+)
+from mc_control_plane.application.data_lease import DataLeaseUnavailable, ResticDataLease
 from mc_control_plane.application.host_protocol import (
     HostCommand,
     HostCommandKind,
@@ -77,6 +81,9 @@ def test_api_enrolls_then_requires_bearer_credential_for_poll(
 
 
 class DataCommandStore:
+    def __init__(self) -> None:
+        self.delivery_count = 0
+
     def poll(self, token, body, now):  # type: ignore[no-untyped-def]
         assert token == "agent-secret"
         return HostCommand(
@@ -89,9 +96,29 @@ class DataCommandStore:
             1,
             {"server_unit_id": "survival"},
             datetime(2026, 7, 22, 13, tzinfo=UTC),
-            HostCommandState.DELIVERED,
-            1,
+            HostCommandState.PENDING,
+            0,
             None,
+        )
+
+    def mark_delivered(self, command_id, agent_id, now):  # type: ignore[no-untyped-def]
+        assert command_id == "command-1"
+        assert agent_id == "agent-1"
+        self.delivery_count += 1
+        command = self.poll("agent-secret", {}, now)
+        return HostCommand(
+            command.command_id,
+            command.agent_id,
+            command.run_id,
+            command.operation_id,
+            command.step,
+            command.kind,
+            command.payload_version,
+            command.payload,
+            command.deadline,
+            HostCommandState.DELIVERED,
+            self.delivery_count,
+            command.result,
         )
 
 
@@ -108,8 +135,9 @@ class DataLeases:
 
 
 def test_api_attaches_data_lease_without_mutating_durable_command() -> None:
+    store = DataCommandStore()
     app = HostApiApplication(  # type: ignore[arg-type]
-        DataCommandStore(),
+        store,
         data_leases=DataLeases(),
         now=lambda: datetime(2026, 7, 22, 12, tzinfo=UTC),
     )
@@ -122,3 +150,48 @@ def test_api_attaches_data_lease_without_mutating_durable_command() -> None:
     assert response.body["data_lease"]["secret_access_key"] == "temporary-secret"
     assert response.body["data_lease"]["schema_version"] == 2
     assert "restic_password" not in response.body["data_lease"]
+    assert store.delivery_count == 1
+
+
+class UnavailableDataLeases:
+    def issue_for(self, command, now):  # type: ignore[no-untyped-def]
+        raise DataLeaseUnavailable("Cloudflare rejected request: status=403 code=10000")
+
+
+def test_api_keeps_command_pending_when_data_lease_cannot_be_issued() -> None:
+    store = DataCommandStore()
+    errors: list[str] = []
+    app = HostApiApplication(  # type: ignore[arg-type]
+        store,
+        data_leases=UnavailableDataLeases(),
+        now=lambda: datetime(2026, 7, 22, 12, tzinfo=UTC),
+        report_error=errors.append,
+    )
+
+    response = app.handle("/v1/host/poll", {}, "Bearer agent-secret")
+
+    assert response.status == 503
+    assert response.body == {"error": "data_lease_unavailable"}
+    assert store.delivery_count == 0
+    assert errors == [
+        "temporary data lease error: Cloudflare rejected request: status=403 code=10000"
+    ]
+
+
+class BusyStore:
+    def poll(self, token, body, now):  # type: ignore[no-untyped-def]
+        raise HostStoreUnavailable("SQLite Host store remained busy")
+
+
+def test_api_reports_sqlite_contention_as_temporary_503() -> None:
+    errors: list[str] = []
+    app = HostApiApplication(  # type: ignore[arg-type]
+        BusyStore(),
+        report_error=errors.append,
+    )
+
+    response = app.handle("/v1/host/poll", {}, "Bearer agent-secret")
+
+    assert response.status == 503
+    assert response.body == {"error": "host_store_unavailable"}
+    assert errors == ["temporary Host store error: SQLite Host store remained busy"]

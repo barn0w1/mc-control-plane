@@ -11,7 +11,10 @@ from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, cast
 
-from mc_control_plane.adapters.outbound.persistence.host_protocol import HostProtocolStore
+from mc_control_plane.adapters.outbound.persistence.host_protocol import (
+    HostProtocolStore,
+    HostStoreUnavailable,
+)
 from mc_control_plane.application.data_lease import DataLeaseProvider, DataLeaseUnavailable
 from mc_control_plane.application.host_protocol import (
     HOST_AGENT_ARTIFACT_PATH,
@@ -41,6 +44,7 @@ class HostApiApplication:
         now: Callable[[], datetime] | None = None,
         poll_after_seconds: int = 5,
         data_leases: DataLeaseProvider | None = None,
+        report_error: Callable[[str], None] | None = None,
     ) -> None:
         if poll_after_seconds <= 0:
             raise ValueError("poll interval must be positive")
@@ -48,6 +52,7 @@ class HostApiApplication:
         self._now = now or (lambda: datetime.now(UTC))
         self._poll_after_seconds = poll_after_seconds
         self._data_leases = data_leases
+        self._report_error = report_error or (lambda _message: None)
 
     def handle(
         self,
@@ -68,12 +73,21 @@ class HostApiApplication:
                 )
             if path == "/v1/host/poll":
                 token = self._bearer_token(authorization)
-                command = self._store.poll(token, body, now=self._now())
+                now = self._now()
+                command = self._store.poll(token, body, now=now)
                 lease = None
                 if command is not None and command.kind.requires_data_lease:
                     if self._data_leases is None:
                         raise DataLeaseUnavailable("data lease provider is not configured")
-                    lease = self._data_leases.issue_for(command, self._now()).wire_value()
+                    lease = self._data_leases.issue_for(command, now).wire_value()
+                if command is not None:
+                    command = self._store.mark_delivered(
+                        command.command_id,
+                        command.agent_id,
+                        now=now,
+                    )
+                    if command is None:
+                        lease = None
                 return HostApiResponse(
                     HTTPStatus.OK,
                     {
@@ -84,10 +98,17 @@ class HostApiApplication:
                     },
                 )
             return HostApiResponse(HTTPStatus.NOT_FOUND, {"error": "not_found"})
-        except DataLeaseUnavailable:
+        except DataLeaseUnavailable as error:
+            self._report_error(f"temporary data lease error: {error}")
             return HostApiResponse(
                 HTTPStatus.SERVICE_UNAVAILABLE,
                 {"error": "data_lease_unavailable"},
+            )
+        except HostStoreUnavailable as error:
+            self._report_error(f"temporary Host store error: {error}")
+            return HostApiResponse(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"error": "host_store_unavailable"},
             )
         except HostAuthenticationError:
             return HostApiResponse(

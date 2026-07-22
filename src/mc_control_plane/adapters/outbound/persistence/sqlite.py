@@ -524,6 +524,25 @@ class SQLiteSnapshotRepository:
         ).fetchone()
         return None if row is None else _snapshot(row)
 
+    def save(self, snapshot: Snapshot) -> None:
+        cursor = self._connection.execute(
+            """
+            UPDATE snapshots
+            SET server_unit_id = ?, run_id = ?, kind = ?, created_at = ?, verified_at = ?
+            WHERE id = ?
+            """,
+            (
+                snapshot.server_unit_id,
+                snapshot.run_id,
+                snapshot.kind,
+                snapshot.created_at.isoformat(),
+                _datetime_text(snapshot.verified_at),
+                snapshot.id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise KeyError(snapshot.id)
+
 
 class SQLiteUnitOfWork:
     def __init__(self, database: SQLiteDatabase) -> None:

@@ -5,6 +5,7 @@ import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from math import ceil
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -32,7 +33,7 @@ class R2ResticSettings:
     account_id: str
     bucket: str
     parent_access_key_id: str
-    ttl_seconds: int = 900
+    ttl_seconds: int = 3600
 
     def __post_init__(self) -> None:
         for value, name in (
@@ -78,12 +79,27 @@ class CloudflareTemporaryCredentialClient:
                 },
                 timeout=self._timeout,
             )
-            response.raise_for_status()
-            document = response.json()
-        except (requests.RequestException, ValueError) as error:
+        except requests.RequestException as error:
             raise DataLeaseUnavailable("Cloudflare temporary credential request failed") from error
-        if not isinstance(document, dict) or document.get("success") is not True:
-            raise DataLeaseUnavailable("Cloudflare rejected temporary credential request")
+        try:
+            document = response.json()
+        except ValueError as error:
+            raise DataLeaseUnavailable(
+                f"Cloudflare returned invalid JSON: status={response.status_code}"
+            ) from error
+        if not isinstance(document, dict):
+            raise DataLeaseUnavailable(
+                f"Cloudflare returned an invalid document: status={response.status_code}"
+            )
+        if not response.ok or document.get("success") is not True:
+            details = _cloudflare_error(document)
+            for sensitive in (bucket, parent_access_key_id):
+                if len(sensitive) >= 3:
+                    details = details.replace(sensitive, "[redacted]")
+            raise DataLeaseUnavailable(
+                f"Cloudflare rejected temporary credential request: status={response.status_code} "
+                f"{details}"
+            )
         result = document.get("result")
         if not isinstance(result, dict):
             raise DataLeaseUnavailable("Cloudflare temporary credential response was invalid")
@@ -109,6 +125,13 @@ class R2ResticLeaseBroker:
         server_unit_id = self._store.server_unit_for_command(command.command_id)
         if command.payload.get("server_unit_id") != server_unit_id:
             raise DataLeaseUnavailable("data command ownership context does not match")
+        remaining = ceil((command.deadline - now).total_seconds())
+        if remaining <= 0:
+            raise DataLeaseUnavailable("data command deadline has passed")
+        if self._settings.ttl_seconds < remaining + 60:
+            raise DataLeaseUnavailable(
+                "R2 temporary credential TTL must exceed the command deadline by 60 seconds"
+            )
         prefix = repository_prefix(server_unit_id)
         permission = (
             "object-read-only"
@@ -138,6 +161,33 @@ class R2ResticLeaseBroker:
             expires_at=now + timedelta(seconds=self._settings.ttl_seconds),
         )
 
+    def preflight(self) -> R2PreflightReport:
+        prefix = "mc-control-plane/preflight/temporary-credentials/"
+        raw = self._client.create(
+            bucket=self._settings.bucket,
+            parent_access_key_id=self._settings.parent_access_key_id,
+            permission="object-read-write",
+            prefix=prefix,
+            ttl_seconds=self._settings.ttl_seconds,
+        )
+        _credential(raw, "accessKeyId")
+        _credential(raw, "secretAccessKey")
+        _credential(raw, "sessionToken")
+        return R2PreflightReport(
+            bucket=self._settings.bucket,
+            prefix=prefix,
+            permission="object-read-write",
+            ttl_seconds=self._settings.ttl_seconds,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class R2PreflightReport:
+    bucket: str
+    prefix: str
+    permission: str
+    ttl_seconds: int
+
 
 def repository_prefix(server_unit_id: str) -> str:
     identity = hashlib.sha256(server_unit_id.encode()).hexdigest()
@@ -159,3 +209,18 @@ def _credential(value: Mapping[str, Any], name: str) -> str:
     if not isinstance(item, str) or not item:
         raise DataLeaseUnavailable(f"Cloudflare response omitted {name}")
     return item
+
+
+def _cloudflare_error(document: Mapping[str, Any]) -> str:
+    errors = document.get("errors")
+    if not isinstance(errors, list):
+        return "error=unspecified"
+    details: list[str] = []
+    for item in errors[:3]:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code")
+        message = item.get("message")
+        safe_message = " ".join(str(message).split())[:200]
+        details.append(f"code={code} message={safe_message or 'unspecified'}")
+    return "; ".join(details) if details else "error=unspecified"

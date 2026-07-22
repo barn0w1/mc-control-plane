@@ -56,6 +56,8 @@ class SnapshotRepository(Protocol):
 
     def get_latest(self, server_unit_id: str) -> Snapshot | None: ...
 
+    def save(self, snapshot: Snapshot) -> None: ...
+
 
 class UnitOfWork(Protocol):
     server_units: ServerUnitRepository

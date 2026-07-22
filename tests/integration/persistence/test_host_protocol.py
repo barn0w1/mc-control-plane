@@ -1,8 +1,13 @@
-from datetime import timedelta
+import sqlite3
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from mc_control_plane.adapters.outbound.persistence import HostProtocolStore, SQLiteDatabase
+from mc_control_plane.adapters.outbound.persistence import (
+    HostProtocolStore,
+    HostStoreUnavailable,
+    SQLiteDatabase,
+)
 from mc_control_plane.application.host_protocol import (
     HostCommandKind,
     HostCommandState,
@@ -127,10 +132,15 @@ def test_command_is_redelivered_until_terminal_result_is_recorded(
         now=clock.now(),
     )
 
-    first = store.poll(token, _poll(), now=clock.now())
-    second = store.poll(token, _poll(), now=clock.now())
+    candidate = store.poll(token, _poll(), now=clock.now())
+    assert candidate is not None
+    first = store.mark_delivered(candidate.command_id, candidate.agent_id, now=clock.now())
+    candidate = store.poll(token, _poll(), now=clock.now())
+    assert candidate is not None
+    second = store.mark_delivered(candidate.command_id, candidate.agent_id, now=clock.now())
     assert first is not None and second is not None
     assert first.command_id == second.command_id == "command-1"
+    assert second.delivery_count == 2
     assert store.get_agent("agent-1").status == "connected"  # type: ignore[union-attr]
 
     result = {
@@ -172,3 +182,39 @@ def test_migration_adds_host_protocol_schema(database: SQLiteDatabase) -> None:
         assert "uq_host_enrollments_run" in indexes
     finally:
         connection.close()
+
+
+def test_poll_retries_a_transient_sqlite_writer_conflict(
+    database: SQLiteDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+    store = HostProtocolStore(database, busy_retry_delays=(0.01,), sleeper=sleeps.append)
+    calls = 0
+
+    def flaky_poll(*args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "_poll_once", flaky_poll)
+
+    assert store.poll("token", {}, now=datetime.now(UTC)) is None
+    assert calls == 2
+    assert sleeps == [0.01]
+
+
+def test_poll_bounds_retries_when_sqlite_remains_busy(
+    database: SQLiteDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = HostProtocolStore(database, busy_retry_delays=(0,), sleeper=lambda _delay: None)
+
+    def busy_poll(*args: object, **kwargs: object) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "_poll_once", busy_poll)
+
+    with pytest.raises(HostStoreUnavailable, match="remained busy"):
+        store.poll("token", {}, now=datetime.now(UTC))

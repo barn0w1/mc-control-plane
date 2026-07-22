@@ -1,6 +1,13 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from mc_control_plane.adapters.outbound.storage.r2 import R2ResticLeaseBroker, R2ResticSettings
+import pytest
+
+from mc_control_plane.adapters.outbound.storage.r2 import (
+    CloudflareTemporaryCredentialClient,
+    R2ResticLeaseBroker,
+    R2ResticSettings,
+)
+from mc_control_plane.application.data_lease import DataLeaseUnavailable
 from mc_control_plane.application.host_protocol import (
     HostCommand,
     HostCommandKind,
@@ -38,9 +45,9 @@ def _command(kind: HostCommandKind) -> HostCommand:
         kind,
         1,
         {"server_unit_id": "survival"},
-        now,
-        HostCommandState.DELIVERED,
-        1,
+        now + timedelta(minutes=30),
+        HostCommandState.PENDING,
+        0,
         None,
     )
 
@@ -50,7 +57,7 @@ def test_r2_lease_is_scoped_and_secret_values_are_not_in_durable_command() -> No
     broker = R2ResticLeaseBroker(  # type: ignore[arg-type]
         FakeStore(),
         credentials,
-        R2ResticSettings("account", "bucket", "parent", 900),
+        R2ResticSettings("account", "bucket", "parent", 3600),
     )
     command = _command(HostCommandKind.SNAPSHOT_DATA)
 
@@ -78,10 +85,88 @@ def test_restore_lease_is_read_only() -> None:
     broker = R2ResticLeaseBroker(  # type: ignore[arg-type]
         FakeStore(),
         credentials,
-        R2ResticSettings("account", "bucket", "parent", 900),
+        R2ResticSettings("account", "bucket", "parent", 3600),
     )
 
     broker.issue_for(_command(HostCommandKind.RESTORE_DATA), datetime(2026, 7, 22, 12, tzinfo=UTC))
 
     assert credentials.request is not None
     assert credentials.request["permission"] == "object-read-only"
+
+
+def test_preflight_mints_and_discards_scoped_write_credential() -> None:
+    credentials = FakeCredentials()
+    broker = R2ResticLeaseBroker(  # type: ignore[arg-type]
+        FakeStore(),
+        credentials,
+        R2ResticSettings("account", "bucket", "parent", 3600),
+    )
+
+    report = broker.preflight()
+
+    assert credentials.request == {
+        "bucket": "bucket",
+        "parent_access_key_id": "parent",
+        "permission": "object-read-write",
+        "prefix": "mc-control-plane/preflight/temporary-credentials/",
+        "ttl_seconds": 3600,
+    }
+    assert report.bucket == "bucket"
+    assert "temporary-secret" not in str(report)
+
+
+def test_lease_ttl_must_outlive_command_deadline() -> None:
+    broker = R2ResticLeaseBroker(  # type: ignore[arg-type]
+        FakeStore(),
+        FakeCredentials(),
+        R2ResticSettings("account", "bucket", "parent", 900),
+    )
+
+    with pytest.raises(DataLeaseUnavailable, match="exceed the command deadline"):
+        broker.issue_for(
+            _command(HostCommandKind.SNAPSHOT_DATA),
+            datetime(2026, 7, 22, 12, tzinfo=UTC),
+        )
+
+
+class RejectedResponse:
+    ok = False
+    status_code = 403
+
+    def json(self) -> dict[str, object]:
+        return {
+            "success": False,
+            "errors": [
+                {
+                    "code": 10000,
+                    "message": "Authentication error for parent-key in bucket",
+                }
+            ],
+        }
+
+
+def test_cloudflare_rejection_has_actionable_but_secret_free_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "mc_control_plane.adapters.outbound.storage.r2.requests.post",
+        lambda *args, **kwargs: RejectedResponse(),
+    )
+    client = CloudflareTemporaryCredentialClient("account", "api-token")
+
+    with pytest.raises(DataLeaseUnavailable) as captured:
+        client.create(
+            bucket="bucket",
+            parent_access_key_id="parent-key",
+            permission="object-read-write",
+            prefix="prefix",
+            ttl_seconds=3600,
+        )
+
+    message = str(captured.value)
+    assert "status=403" in message
+    assert "code=10000" in message
+    assert "Authentication error" in message
+    assert "[redacted]" in message
+    assert "api-token" not in message
+    assert "parent-key" not in message

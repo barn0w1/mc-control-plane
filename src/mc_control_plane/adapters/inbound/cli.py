@@ -54,6 +54,7 @@ from mc_control_plane.application.commands.server_unit import (
     RequestServerUnitCreation,
 )
 from mc_control_plane.application.commands.start import RequestStart, StartServerUnit
+from mc_control_plane.application.data_lease import DataLeaseUnavailable
 from mc_control_plane.application.gate3_cleanup import cleanup_gate3_runtime
 from mc_control_plane.application.gate4 import Gate4Error, run_gate4_data_lifecycle
 from mc_control_plane.application.host_protocol import (
@@ -171,7 +172,7 @@ def _parser() -> argparse.ArgumentParser:
     host_api.add_argument("--r2-bucket")
     host_api.add_argument("--r2-parent-access-key-id")
     host_api.add_argument("--cloudflare-api-token-file", type=Path)
-    host_api.add_argument("--r2-lease-ttl-seconds", type=int, default=900)
+    host_api.add_argument("--r2-lease-ttl-seconds", type=int, default=3600)
 
     gate2 = commands.add_parser(
         "linode-gate2-check",
@@ -304,13 +305,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             database = SQLiteDatabase(arguments.database)
             database.migrate()
+            store = HostProtocolStore(database)
+            data_leases = _data_lease_broker(arguments, store)
+            if data_leases is not None:
+                r2_report = data_leases.preflight()
+                print(
+                    "R2 data lease preflight passed: "
+                    f"bucket={r2_report.bucket} permission={r2_report.permission} "
+                    f"ttl={r2_report.ttl_seconds}s",
+                    flush=True,
+                )
             print(
                 f"Serving Host API on {arguments.bind}:{arguments.port} "
-                f"artifact-path={HOST_AGENT_ARTIFACT_PATH}"
+                f"artifact-path={HOST_AGENT_ARTIFACT_PATH}",
+                flush=True,
             )
-            store = HostProtocolStore(database)
             serve_host_api(
-                HostApiApplication(store, data_leases=_data_lease_broker(arguments, store)),
+                HostApiApplication(
+                    store,
+                    data_leases=data_leases,
+                    report_error=lambda message: print(
+                        f"Host API temporary error: {message}", file=sys.stderr
+                    ),
+                ),
                 bind=arguments.bind,
                 port=arguments.port,
                 tls_certificate=arguments.tls_certificate,
@@ -319,7 +336,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         except KeyboardInterrupt:
             return 0
-        except (OSError, ValueError) as error:
+        except (DataLeaseUnavailable, OSError, ValueError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
         return 0
@@ -411,7 +428,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "Gate 4 check passed: "
                 f"initial-snapshot={gate4_result.initial_snapshot_id} "
                 f"modified-snapshot={gate4_result.modified_snapshot_id} "
-                "fresh-host-restore=passed snapshot-before-delete=passed cleanup=confirmed"
+                "fresh-host-restore=passed snapshots=verified "
+                "snapshot-before-delete=passed cleanup=confirmed"
             )
             return 0
         if arguments.command == "linode-gate3-cleanup":

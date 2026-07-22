@@ -3,8 +3,10 @@
 import json
 import secrets
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from hashlib import sha256
+from time import sleep
 from typing import Any, cast
 from uuid import uuid4
 
@@ -48,11 +50,36 @@ def _object(value: object, field: str) -> dict[str, Any]:
     return cast(dict[str, Any], value)
 
 
+class HostStoreUnavailable(Exception):
+    """The Host protocol store remained busy after a bounded retry."""
+
+
+def _sqlite_busy(error: sqlite3.OperationalError) -> bool:
+    busy_codes = {
+        sqlite3.SQLITE_BUSY,
+        sqlite3.SQLITE_BUSY_SNAPSHOT,
+        sqlite3.SQLITE_LOCKED,
+    }
+    code = getattr(error, "sqlite_errorcode", None)
+    message = str(error).lower()
+    return code in busy_codes or "locked" in message or "busy" in message
+
+
 class HostProtocolStore:
     """Own host protocol transactions without leaking SQL into the HTTP adapter."""
 
-    def __init__(self, database: SQLiteDatabase) -> None:
+    def __init__(
+        self,
+        database: SQLiteDatabase,
+        *,
+        busy_retry_delays: tuple[float, ...] = (0.05,),
+        sleeper: Callable[[float], None] = sleep,
+    ) -> None:
+        if any(delay < 0 for delay in busy_retry_delays):
+            raise ValueError("SQLite busy retry delays must not be negative")
         self._database = database
+        self._busy_retry_delays = busy_retry_delays
+        self._sleeper = sleeper
 
     def issue_enrollment(
         self,
@@ -167,6 +194,23 @@ class HostProtocolStore:
         )
 
     def enroll(self, request: dict[str, Any], *, now: datetime) -> HostAgentObservation:
+        for delay in (*self._busy_retry_delays, None):
+            try:
+                return self._enroll_once(request, now=now)
+            except sqlite3.OperationalError as error:
+                if not _sqlite_busy(error):
+                    raise
+                if delay is None:
+                    raise HostStoreUnavailable("SQLite Host store remained busy") from error
+                self._sleeper(delay)
+        raise AssertionError("SQLite busy retry loop did not return")
+
+    def _enroll_once(
+        self,
+        request: dict[str, Any],
+        *,
+        now: datetime,
+    ) -> HostAgentObservation:
         _aware(now, "now")
         required = {
             "protocol_version",
@@ -257,6 +301,24 @@ class HostProtocolStore:
         *,
         now: datetime,
     ) -> HostCommand | None:
+        for delay in (*self._busy_retry_delays, None):
+            try:
+                return self._poll_once(agent_token, request, now=now)
+            except sqlite3.OperationalError as error:
+                if not _sqlite_busy(error):
+                    raise
+                if delay is None:
+                    raise HostStoreUnavailable("SQLite Host store remained busy") from error
+                self._sleeper(delay)
+        raise AssertionError("SQLite busy retry loop did not return")
+
+    def _poll_once(
+        self,
+        agent_token: str,
+        request: dict[str, Any],
+        *,
+        now: datetime,
+    ) -> HostCommand | None:
         _aware(now, "now")
         required = {
             "protocol_version",
@@ -341,18 +403,87 @@ class HostProtocolStore:
                         ),
                     )
                 else:
-                    connection.execute(
-                        """
-                        UPDATE host_commands
-                        SET state = 'delivered', delivery_count = delivery_count + 1,
-                            updated_at = ?
-                        WHERE command_id = ?
-                        """,
-                        (now.isoformat(), command_row["command_id"]),
-                    )
                     command = self._command_from_row(command_row)
             connection.commit()
             return command
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def mark_delivered(
+        self,
+        command_id: str,
+        agent_id: str,
+        *,
+        now: datetime,
+    ) -> HostCommand | None:
+        """Record delivery only after all ephemeral response data is ready."""
+
+        for delay in (*self._busy_retry_delays, None):
+            try:
+                return self._mark_delivered_once(command_id, agent_id, now=now)
+            except sqlite3.OperationalError as error:
+                if not _sqlite_busy(error):
+                    raise
+                if delay is None:
+                    raise HostStoreUnavailable("SQLite Host store remained busy") from error
+                self._sleeper(delay)
+        raise AssertionError("SQLite busy retry loop did not return")
+
+    def _mark_delivered_once(
+        self,
+        command_id: str,
+        agent_id: str,
+        *,
+        now: datetime,
+    ) -> HostCommand | None:
+
+        _aware(now, "now")
+        connection = self._database.connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT * FROM host_commands
+                WHERE command_id = ? AND agent_id = ?
+                  AND state IN ('pending', 'delivered')
+                """,
+                (_text(command_id, "command_id"), _text(agent_id, "agent_id")),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            deadline = datetime.fromisoformat(cast(str, row["deadline"]))
+            if deadline <= now:
+                connection.execute(
+                    """
+                    UPDATE host_commands
+                    SET state = 'failed', result_json = ?, updated_at = ?
+                    WHERE command_id = ?
+                    """,
+                    (
+                        _json({"error_code": "command_expired", "message": "deadline passed"}),
+                        now.isoformat(),
+                        command_id,
+                    ),
+                )
+                connection.commit()
+                return None
+            connection.execute(
+                """
+                UPDATE host_commands
+                SET state = 'delivered', delivery_count = delivery_count + 1,
+                    updated_at = ?
+                WHERE command_id = ?
+                """,
+                (now.isoformat(), command_id),
+            )
+            delivered = connection.execute(
+                "SELECT * FROM host_commands WHERE command_id = ?", (command_id,)
+            ).fetchone()
+            connection.commit()
+            return self._command_from_row(delivered)
         except BaseException:
             connection.rollback()
             raise
