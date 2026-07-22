@@ -130,6 +130,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 run_id=arguments.run_id,
                 timeout_seconds=arguments.timeout_seconds,
                 poll_seconds=arguments.poll_seconds,
+                progress=lambda message: print(f"Gate 1: {message}"),
             )
             resources = ",".join(deleted) if deleted else "none"
             print(f"Gate 1 cleanup confirmed: resources={resources} absent=yes")
@@ -140,7 +141,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(
                 "Linode preflight passed: "
                 f"region={report.region} type={report.instance_type} "
-                f"image={report.image} firewall={report.firewall_id} metadata=yes"
+                f"image={report.image} firewall={report.firewall_id} "
+                "metadata=yes interfaces=linode disk-encryption=disabled"
             )
             return 0
         if arguments.command == "linode-gate1-check":
@@ -156,11 +158,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 timeout_seconds=arguments.timeout_seconds,
                 poll_seconds=arguments.poll_seconds,
                 run_id_factory=lambda: run_id,
+                progress=lambda message: print(f"Gate 1: {message}"),
             )
             print(
                 "Gate 1 check passed: "
                 f"resource={result.provider_resource_id} status={result.final_provider_status} "
-                "metadata=yes firewall=yes backups=disabled cleanup=confirmed"
+                "metadata=yes firewall=yes backups=disabled "
+                "disk-encryption=disabled cleanup=confirmed"
             )
             return 0
     except (ComputeProviderError, LinodeGate1CheckError, OSError, ValueError) as error:

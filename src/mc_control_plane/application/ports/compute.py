@@ -44,6 +44,7 @@ class RuntimeObservation:
     tags: frozenset[str]
     has_user_data: bool | None = None
     backups_enabled: bool | None = None
+    disk_encryption: str | None = None
 
 
 class ComputeActionUncertain(Exception):

@@ -64,6 +64,7 @@ class FakeComputeProvider:
             tags=request.identity.tags,
             has_user_data=request.metadata_user_data is not None,
             backups_enabled=False,
+            disk_encryption="disabled",
         )
         self.resources[provider_id] = observation
         self.firewall_ids[provider_id] = (
@@ -116,4 +117,5 @@ class FakeComputeProvider:
             tags=current.tags,
             has_user_data=current.has_user_data,
             backups_enabled=current.backups_enabled,
+            disk_encryption=current.disk_encryption,
         )

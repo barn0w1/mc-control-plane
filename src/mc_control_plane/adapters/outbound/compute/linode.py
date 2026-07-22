@@ -93,6 +93,7 @@ class LinodeRuntimePreflight:
     image: str
     firewall_id: str | None
     metadata_supported: bool
+    linode_interfaces_supported: bool
 
 
 class _TimeoutSession(Session):
@@ -162,6 +163,7 @@ class LinodeComputeProvider:
                 "tags": sorted(self._create_tags(request)),
                 "booted": True,
                 "backups_enabled": False,
+                "disk_encryption": "disabled",
             }
             if firewall is not None:
                 kwargs["interface_generation"] = "linode"
@@ -254,6 +256,10 @@ class LinodeComputeProvider:
                 raise ComputeRequestRejected(
                     f"Linode region {spec.region!r} does not support Linodes"
                 )
+            if "Linode Interfaces" not in region_capabilities:
+                raise ComputeRequestRejected(
+                    f"Linode region {spec.region!r} does not support Linode Interfaces"
+                )
             if require_metadata and "Metadata" not in region_capabilities:
                 raise ComputeRequestRejected(
                     f"Linode region {spec.region!r} does not support Metadata"
@@ -293,19 +299,27 @@ class LinodeComputeProvider:
                 image=spec.image,
                 firewall_id=str(firewall_id) if firewall_id is not None else None,
                 metadata_supported=require_metadata,
+                linode_interfaces_supported=True,
             )
 
         return self._read(validate)
 
     def attached_firewall_ids(self, provider_resource_id: str) -> frozenset[str]:
-        """Return firewall IDs actually attached to one Linode."""
+        """Return firewall IDs attached to this Linode's interfaces."""
 
         resource_id = self._resource_id(provider_resource_id)
 
         def read_firewalls() -> frozenset[str]:
             client = cast(Any, self._client)
             instance = client.load(Instance, resource_id)
-            return frozenset(str(firewall.id) for firewall in instance.firewalls())
+            interfaces = instance.linode_interfaces
+            if interfaces is None:
+                raise ComputeRequestRejected(
+                    f"Linode {provider_resource_id} is not using Linode Interfaces"
+                )
+            return frozenset(
+                str(firewall.id) for interface in interfaces for firewall in interface.firewalls()
+            )
 
         return self._read(read_firewalls, resource_id=provider_resource_id)
 
@@ -332,6 +346,7 @@ class LinodeComputeProvider:
         region_value = getattr(raw.region, "id", raw.region)
         backups = getattr(raw, "backups", None)
         backups_enabled = getattr(backups, "enabled", None)
+        disk_encryption = getattr(raw, "disk_encryption", None)
         return RuntimeObservation(
             provider_resource_id=str(raw.id),
             provider=self.provider_name,
@@ -343,6 +358,9 @@ class LinodeComputeProvider:
                 bool(raw.has_user_data) if getattr(raw, "has_user_data", None) is not None else None
             ),
             backups_enabled=(bool(backups_enabled) if backups_enabled is not None else None),
+            disk_encryption=(
+                self._string_value(disk_encryption) if disk_encryption is not None else None
+            ),
         )
 
     @staticmethod

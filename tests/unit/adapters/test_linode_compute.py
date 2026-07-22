@@ -29,6 +29,14 @@ class StubRegion:
     id: str
 
 
+class StubLinodeInterface:
+    def __init__(self, firewall_ids: tuple[int, ...]) -> None:
+        self._firewalls = [type("FirewallRef", (), {"id": item})() for item in firewall_ids]
+
+    def firewalls(self) -> list[object]:
+        return self._firewalls
+
+
 class StubInstance:
     def __init__(
         self,
@@ -39,6 +47,7 @@ class StubInstance:
         tags: set[str] | None = None,
         has_user_data: bool | None = None,
         backups_enabled: bool | None = None,
+        disk_encryption: str | None = None,
         firewall_ids: tuple[int, ...] = (),
     ) -> None:
         self.id = resource_id
@@ -47,15 +56,13 @@ class StubInstance:
         self.tags = list(tags or set())
         self.has_user_data = has_user_data
         self.backups = type("Backups", (), {"enabled": backups_enabled})()
-        self._firewalls = [type("FirewallRef", (), {"id": item})() for item in firewall_ids]
+        self.disk_encryption = disk_encryption
+        self.linode_interfaces = [StubLinodeInterface(firewall_ids)]
         self.deleted = False
 
     def delete(self) -> bool:
         self.deleted = True
         return True
-
-    def firewalls(self) -> list[object]:
-        return self._firewalls
 
 
 class StubLinodeGroup:
@@ -179,6 +186,7 @@ def test_create_sends_owned_tags_authentication_and_existing_firewall(
         42,
         status="provisioning",
         tags=set(identity.tags),
+        disk_encryption="disabled",
     )
 
     observation = provider.create_runtime(
@@ -210,6 +218,8 @@ def test_create_sends_owned_tags_authentication_and_existing_firewall(
     assert client.linode.create_kwargs["metadata"] == {"user_data": "I2Nsb3VkLWNvbmZpZwo="}
     assert client.linode.create_kwargs["booted"] is True
     assert client.linode.create_kwargs["backups_enabled"] is False
+    assert client.linode.create_kwargs["disk_encryption"] == "disabled"
+    assert observation.disk_encryption == "disabled"
     assert len(client.linode.create_kwargs["label"]) <= 64
 
 
@@ -310,7 +320,7 @@ def test_reads_firewall_ids_actually_attached_to_instance(
 class StubProviderRegion:
     id: str = "us-ord"
     status: str = "ok"
-    capabilities: tuple[str, ...] = ("Linodes", "Metadata")
+    capabilities: tuple[str, ...] = ("Linodes", "Metadata", "Linode Interfaces")
 
 
 @dataclass
@@ -354,6 +364,7 @@ def test_preflight_validates_region_image_type_and_firewall(
     assert report.instance_type == "g6-standard-2"
     assert report.firewall_id == "12345"
     assert report.metadata_supported is True
+    assert report.linode_interfaces_supported is True
 
 
 def test_preflight_rejects_region_without_metadata(
@@ -362,9 +373,23 @@ def test_preflight_rejects_region_without_metadata(
     spec: RuntimeSpec,
 ) -> None:
     _preflight_resources(client)
-    client.loaded_by_target["Region"] = StubProviderRegion(capabilities=("Linodes",))
+    client.loaded_by_target["Region"] = StubProviderRegion(
+        capabilities=("Linodes", "Linode Interfaces")
+    )
 
     with pytest.raises(ComputeRequestRejected, match="Metadata"):
+        provider.validate_runtime_spec(spec)
+
+
+def test_preflight_rejects_region_without_linode_interfaces(
+    provider: LinodeComputeProvider,
+    client: StubClient,
+    spec: RuntimeSpec,
+) -> None:
+    _preflight_resources(client)
+    client.loaded_by_target["Region"] = StubProviderRegion(capabilities=("Linodes", "Metadata"))
+
+    with pytest.raises(ComputeRequestRejected, match="Linode Interfaces"):
         provider.validate_runtime_spec(spec)
 
 

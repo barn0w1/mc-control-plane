@@ -30,6 +30,7 @@ class Gate1FakeProvider(FakeComputeProvider):
             image=spec.image,
             firewall_id=spec.firewall_id,
             metadata_supported=require_metadata,
+            linode_interfaces_supported=True,
         )
 
 
@@ -69,6 +70,7 @@ def test_gate1_check_creates_reaches_running_and_cleans_up(spec: RuntimeSpec) ->
     assert result.metadata_confirmed is True
     assert result.firewall_confirmed is True
     assert result.backups_disabled is True
+    assert result.disk_encryption_disabled is True
     assert result.cleanup_confirmed is True
     assert provider.resources == {}
     assert provider.deleted == ["linode-1"]
@@ -131,6 +133,7 @@ def test_gate1_check_cleans_up_when_metadata_confirmation_is_missing(
                 tags=current.tags,
                 has_user_data=False,
                 backups_enabled=False,
+                disk_encryption="disabled",
             )
 
     with pytest.raises(LinodeGate1CheckError, match="Metadata"):

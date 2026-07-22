@@ -37,6 +37,7 @@ class LinodeGate1Result:
     metadata_confirmed: bool
     firewall_confirmed: bool
     backups_disabled: bool
+    disk_encryption_disabled: bool
     cleanup_confirmed: bool
 
 
@@ -50,6 +51,7 @@ def run_linode_gate1_check(
     now: Callable[[], datetime] | None = None,
     sleeper: Callable[[float], None] = sleep,
     run_id_factory: Callable[[], str] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> LinodeGate1Result:
     """Create, observe, ownership-check, and delete one uniquely tagged VM.
 
@@ -62,6 +64,7 @@ def run_linode_gate1_check(
             f"Gate 1 requires Debian 13 image {DEBIAN_13_IMAGE!r}, got {spec.image!r}"
         )
     attempts = _attempt_count(timeout_seconds, poll_seconds)
+    report = progress or (lambda _message: None)
     clock = now or (lambda: datetime.now(UTC))
     make_run_id = run_id_factory or (lambda: f"gate1-{uuid4().hex}")
     started_at = clock()
@@ -80,6 +83,7 @@ def run_linode_gate1_check(
         expires_at=started_at + timedelta(hours=1),
     )
     provider.validate_runtime_spec(spec, require_metadata=True, require_firewall=True)
+    report("preflight passed")
 
     create_attempted = False
     tracked_ids: set[str] = set()
@@ -92,11 +96,21 @@ def run_linode_gate1_check(
             raise LinodeGate1CheckError("unique Gate 1 identity unexpectedly already exists")
 
         create_attempted = True
+        report("creating Linode")
         try:
             created = provider.create_runtime(request)
             tracked_ids.add(created.provider_resource_id)
+            report(f"Linode created: resource={created.provider_resource_id}")
         except ComputeActionUncertain:
-            created = _wait_for_discovery(provider, identity, attempts, poll_seconds, sleeper)
+            report("create result uncertain; discovering by exact ownership tags")
+            created = _wait_for_discovery(
+                provider,
+                identity,
+                attempts,
+                poll_seconds,
+                sleeper,
+                report,
+            )
             tracked_ids.add(created.provider_resource_id)
 
         successful_observation = _wait_for_running(
@@ -106,6 +120,7 @@ def run_linode_gate1_check(
             attempts,
             poll_seconds,
             sleeper,
+            report,
         )
         if successful_observation.has_user_data is not True:
             raise LinodeGate1CheckError(
@@ -116,6 +131,12 @@ def run_linode_gate1_check(
                 "Linode Backup was enabled or could not be confirmed disabled; "
                 "check the account-wide backups_enabled setting"
             )
+        if successful_observation.disk_encryption != "disabled":
+            raise LinodeGate1CheckError(
+                "local disk encryption was not confirmed disabled: "
+                f"{successful_observation.disk_encryption!r}"
+            )
+        report("Metadata, Backup, and disk-encryption observations passed")
         expected_firewall = str(spec.firewall_id)
         attached_firewalls = provider.attached_firewall_ids(
             successful_observation.provider_resource_id
@@ -124,12 +145,22 @@ def run_linode_gate1_check(
             raise LinodeGate1CheckError(
                 f"expected firewall {expected_firewall} is not attached to the Linode"
             )
+        report(f"Linode Interface firewall confirmed: firewall={expected_firewall}")
     except BaseException as error:
         operation_error = error
 
     if create_attempted:
         try:
-            _cleanup(provider, identity, tracked_ids, attempts, poll_seconds, sleeper)
+            report("starting owned-resource cleanup")
+            _cleanup(
+                provider,
+                identity,
+                tracked_ids,
+                attempts,
+                poll_seconds,
+                sleeper,
+                report,
+            )
         except BaseException as cleanup_error:
             context = (
                 f"; original check failed with {type(operation_error).__name__}: {operation_error}"
@@ -151,6 +182,7 @@ def run_linode_gate1_check(
         metadata_confirmed=True,
         firewall_confirmed=True,
         backups_disabled=True,
+        disk_encryption_disabled=True,
         cleanup_confirmed=True,
     )
 
@@ -163,6 +195,7 @@ def cleanup_linode_gate1_resources(
     timeout_seconds: float = 600.0,
     poll_seconds: float = 5.0,
     sleeper: Callable[[float], None] = sleep,
+    progress: Callable[[str], None] | None = None,
 ) -> tuple[str, ...]:
     """Delete only resources matching one complete Gate 1 identity."""
 
@@ -172,9 +205,10 @@ def cleanup_linode_gate1_resources(
         run_id=run_id,
     )
     attempts = _attempt_count(timeout_seconds, poll_seconds)
+    report = progress or (lambda _message: None)
     found = _exact_resources(provider, identity)
     resource_ids = {item.provider_resource_id for item in found}
-    _cleanup(provider, identity, resource_ids, attempts, poll_seconds, sleeper)
+    _cleanup(provider, identity, resource_ids, attempts, poll_seconds, sleeper, report)
     return tuple(sorted(resource_ids))
 
 
@@ -184,9 +218,11 @@ def _wait_for_discovery(
     attempts: int,
     poll_seconds: float,
     sleeper: Callable[[float], None],
+    report: Callable[[str], None],
 ) -> RuntimeObservation:
     for attempt in range(attempts):
         found = _exact_resources(provider, identity)
+        report(f"discovery poll {attempt + 1}/{attempts}: matches={len(found)}")
         if len(found) > 1:
             raise LinodeGate1CheckError(
                 "uncertain create produced more than one exactly owned Linode"
@@ -204,9 +240,14 @@ def _wait_for_running(
     attempts: int,
     poll_seconds: float,
     sleeper: Callable[[float], None],
+    report: Callable[[str], None],
 ) -> RuntimeObservation:
     for attempt in range(attempts):
         observation = provider.observe_runtime(provider_resource_id)
+        report(
+            f"startup poll {attempt + 1}/{attempts}: "
+            f"resource={provider_resource_id} status={observation.raw_status}"
+        )
         if not identity.owns(observation.tags):
             raise LinodeGate1CheckError("created Linode lost its exact ownership tags")
         if observation.lifecycle is ComputeLifecycle.RUNNING:
@@ -226,6 +267,7 @@ def _cleanup(
     attempts: int,
     poll_seconds: float,
     sleeper: Callable[[float], None],
+    report: Callable[[str], None],
 ) -> None:
     discovery_error: ComputeProviderError | None = None
     try:
@@ -238,6 +280,7 @@ def _cleanup(
         raise discovery_error
 
     for provider_resource_id in sorted(tracked_ids):
+        report(f"deleting owned Linode: resource={provider_resource_id}")
         delete_uncertain = False
         try:
             provider.delete_runtime(provider_resource_id, identity)
@@ -248,7 +291,12 @@ def _cleanup(
             try:
                 observation = provider.observe_runtime(provider_resource_id)
             except ComputeResourceNotFound:
+                report(f"cleanup confirmed absent: resource={provider_resource_id}")
                 break
+            report(
+                f"cleanup poll {attempt + 1}/{attempts}: "
+                f"resource={provider_resource_id} status={observation.raw_status}"
+            )
             if not identity.owns(observation.tags):
                 raise LinodeGate1CleanupError(
                     f"resource {provider_resource_id} changed ownership during cleanup"
