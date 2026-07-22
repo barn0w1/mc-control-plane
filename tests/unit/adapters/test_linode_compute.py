@@ -59,9 +59,14 @@ class StubInstance:
         self.disk_encryption = disk_encryption
         self.linode_interfaces = [StubLinodeInterface(firewall_ids)]
         self.deleted = False
+        self.rebooted = False
 
     def delete(self) -> bool:
         self.deleted = True
+        return True
+
+    def reboot(self) -> bool:
+        self.rebooted = True
         return True
 
 
@@ -303,6 +308,33 @@ def test_delete_owned_instance(
     provider.delete_runtime("42", identity)
 
     assert instance.deleted is True
+
+
+def test_reboot_checks_ownership_and_reboots_owned_instance(
+    provider: LinodeComputeProvider,
+    client: StubClient,
+    identity: ResourceIdentity,
+) -> None:
+    instance = StubInstance(42, tags=set(identity.tags))
+    client.loaded = instance
+
+    provider.reboot_runtime("42", identity)
+
+    assert instance.rebooted is True
+
+
+def test_reboot_rejects_unowned_instance(
+    provider: LinodeComputeProvider,
+    client: StubClient,
+    identity: ResourceIdentity,
+) -> None:
+    instance = StubInstance(42, tags={"unmanaged"})
+    client.loaded = instance
+
+    with pytest.raises(ComputeOwnershipMismatch):
+        provider.reboot_runtime("42", identity)
+
+    assert instance.rebooted is False
 
 
 def test_reads_firewall_ids_actually_attached_to_instance(

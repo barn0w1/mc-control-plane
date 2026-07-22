@@ -4,10 +4,12 @@ import argparse
 import os
 import sys
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
 from mc_control_plane import __version__
+from mc_control_plane.adapters.inbound.host_api import HostApiApplication, serve_host_api
 from mc_control_plane.adapters.outbound.compute import (
     LinodeComputeProvider,
     LinodeComputeSettings,
@@ -18,7 +20,13 @@ from mc_control_plane.adapters.outbound.compute.linode_gate1 import (
     cleanup_linode_gate1_resources,
     run_linode_gate1_check,
 )
-from mc_control_plane.adapters.outbound.persistence import SQLiteDatabase
+from mc_control_plane.adapters.outbound.compute.linode_gate2 import (
+    LinodeGate2CheckError,
+    cleanup_linode_gate2_resources,
+    run_linode_gate2_check,
+)
+from mc_control_plane.adapters.outbound.host import HostBootstrapSpec, artifact_sha256
+from mc_control_plane.adapters.outbound.persistence import HostProtocolStore, SQLiteDatabase
 from mc_control_plane.application.ports.compute import ComputeProviderError
 from mc_control_plane.domain.models import RuntimeSpec
 
@@ -60,6 +68,42 @@ def _parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--timeout-seconds", type=float, default=600.0)
     cleanup.add_argument("--poll-seconds", type=float, default=5.0)
     cleanup.add_argument("--confirm-owned-delete", action="store_true")
+
+    host_api = commands.add_parser(
+        "host-api-serve",
+        help="serve the authenticated Host agent API and pinned agent artifact",
+    )
+    host_api.add_argument("--database", required=True, type=Path)
+    host_api.add_argument("--bind", default="127.0.0.1")
+    host_api.add_argument("--port", default=8443, type=int)
+    host_api.add_argument("--tls-certificate", type=Path)
+    host_api.add_argument("--tls-private-key", type=Path)
+    host_api.add_argument("--agent-wheel", required=True, type=Path)
+
+    gate2 = commands.add_parser(
+        "linode-gate2-check",
+        help="run the billable Debian Host/agent/Quadlet acceptance check",
+    )
+    _add_linode_arguments(gate2)
+    gate2.add_argument("--database", required=True, type=Path)
+    gate2.add_argument("--control-plane-url", required=True)
+    gate2.add_argument("--agent-wheel", required=True, type=Path)
+    gate2.add_argument("--fixture-image", required=True)
+    gate2.add_argument("--timeout-seconds", type=float, default=900.0)
+    gate2.add_argument("--poll-seconds", type=float, default=5.0)
+    gate2.add_argument("--system-id", default="mc-control-plane")
+    gate2.add_argument("--confirm-billable-create-reboot-delete", action="store_true")
+
+    gate2_cleanup = commands.add_parser(
+        "linode-gate2-cleanup",
+        help="recover and delete resources matching one complete Gate 2 identity",
+    )
+    _add_ssh_key_argument(gate2_cleanup)
+    gate2_cleanup.add_argument("--system-id", default="mc-control-plane")
+    gate2_cleanup.add_argument("--run-id", required=True)
+    gate2_cleanup.add_argument("--timeout-seconds", type=float, default=600.0)
+    gate2_cleanup.add_argument("--poll-seconds", type=float, default=5.0)
+    gate2_cleanup.add_argument("--confirm-owned-delete", action="store_true")
     return parser
 
 
@@ -109,6 +153,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         database.migrate()
         print(f"initialized {arguments.database}")
         return 0
+    if arguments.command == "host-api-serve":
+        try:
+            database = SQLiteDatabase(arguments.database)
+            database.migrate()
+            print(f"Serving Host API on {arguments.bind}:{arguments.port}")
+            serve_host_api(
+                HostApiApplication(HostProtocolStore(database)),
+                bind=arguments.bind,
+                port=arguments.port,
+                tls_certificate=arguments.tls_certificate,
+                tls_private_key=arguments.tls_private_key,
+                agent_artifact=arguments.agent_wheel,
+            )
+        except KeyboardInterrupt:
+            return 0
+        except (OSError, ValueError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        return 0
     if arguments.command == "linode-gate1-check" and not (arguments.confirm_billable_create_delete):
         print(
             "refusing billable check without --confirm-billable-create-delete",
@@ -116,6 +179,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     if arguments.command == "linode-gate1-cleanup" and not arguments.confirm_owned_delete:
+        print(
+            "refusing cleanup without --confirm-owned-delete",
+            file=sys.stderr,
+        )
+        return 2
+    if arguments.command == "linode-gate2-check" and not (
+        arguments.confirm_billable_create_reboot_delete
+    ):
+        print(
+            "refusing billable check without --confirm-billable-create-reboot-delete",
+            file=sys.stderr,
+        )
+        return 2
+    if arguments.command == "linode-gate2-cleanup" and not arguments.confirm_owned_delete:
         print(
             "refusing cleanup without --confirm-owned-delete",
             file=sys.stderr,
@@ -134,6 +211,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             resources = ",".join(deleted) if deleted else "none"
             print(f"Gate 1 cleanup confirmed: resources={resources} absent=yes")
+            return 0
+        if arguments.command == "linode-gate2-cleanup":
+            deleted = cleanup_linode_gate2_resources(
+                provider,
+                system_id=arguments.system_id,
+                run_id=arguments.run_id,
+                timeout_seconds=arguments.timeout_seconds,
+                poll_seconds=arguments.poll_seconds,
+                progress=lambda message: print(f"Gate 2: {message}"),
+            )
+            resources = ",".join(deleted) if deleted else "none"
+            print(f"Gate 2 cleanup confirmed: resources={resources} absent=yes")
             return 0
         spec = _runtime_spec(arguments)
         if arguments.command == "linode-preflight":
@@ -167,7 +256,62 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "disk-encryption=disabled cleanup=confirmed"
             )
             return 0
-    except (ComputeProviderError, LinodeGate1CheckError, OSError, ValueError) as error:
+        if arguments.command == "linode-gate2-check":
+            database = SQLiteDatabase(arguments.database)
+            database.migrate()
+            store = HostProtocolStore(database)
+            now = datetime.now(UTC)
+            run_id = f"gate2-{uuid4().hex}"
+            agent_id = f"agent-{run_id}"
+            issued = store.issue_enrollment(
+                run_id=run_id,
+                resource_identity=run_id,
+                expires_at=now + timedelta(minutes=30),
+                now=now,
+            )
+            wheel = arguments.agent_wheel.read_bytes()
+            artifact_url = (
+                arguments.control_plane_url.rstrip("/") + "/artifacts/mccp-host-agent-0.1.0.whl"
+            )
+            bootstrap = HostBootstrapSpec(
+                control_plane_url=arguments.control_plane_url,
+                agent_id=agent_id,
+                run_id=run_id,
+                resource_identity=run_id,
+                enrollment_token=issued.token,
+                agent_wheel_url=artifact_url,
+                agent_wheel_sha256=artifact_sha256(wheel),
+                agent_version="0.1.0",
+                fixture_image=arguments.fixture_image,
+            )
+            print(
+                "Starting billable Gate 2 check; the owned Linode will be rebooted and deleted. "
+                f"recovery-run-id={run_id} agent-id={agent_id}"
+            )
+            gate2_result = run_linode_gate2_check(
+                provider,
+                store,
+                _runtime_spec(arguments),
+                bootstrap,
+                system_id=arguments.system_id,
+                timeout_seconds=arguments.timeout_seconds,
+                poll_seconds=arguments.poll_seconds,
+                progress=lambda message: print(f"Gate 2: {message}"),
+            )
+            print(
+                "Gate 2 check passed: "
+                f"resource={gate2_result.provider_resource_id} agent={gate2_result.agent_id} "
+                "enrollment=one-time commands=idempotent quadlet=passed reboot=passed "
+                "fixture=stopped cleanup=confirmed"
+            )
+            return 0
+    except (
+        ComputeProviderError,
+        LinodeGate1CheckError,
+        LinodeGate2CheckError,
+        OSError,
+        ValueError,
+    ) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     raise AssertionError(f"unhandled command: {arguments.command}")

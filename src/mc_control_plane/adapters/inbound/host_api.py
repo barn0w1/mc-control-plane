@@ -112,6 +112,7 @@ def serve_host_api(
     port: int,
     tls_certificate: Path | None,
     tls_private_key: Path | None,
+    agent_artifact: Path | None = None,
 ) -> None:
     """Serve the API, requiring TLS whenever it is reachable beyond loopback."""
 
@@ -147,6 +148,26 @@ def serve_host_api(
                 self.headers.get("Authorization"),
             )
             self._write(response.status, response.body)
+
+        def do_GET(self) -> None:
+            if self.path != "/artifacts/mccp-host-agent-0.1.0.whl" or agent_artifact is None:
+                self._write(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+                return
+            try:
+                size = agent_artifact.stat().st_size
+                stream = agent_artifact.open("rb")
+            except OSError:
+                self._write(HTTPStatus.NOT_FOUND, {"error": "artifact_unavailable"})
+                return
+            with stream:
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Length", str(size))
+                self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                while chunk := stream.read(64 * 1024):
+                    self.wfile.write(chunk)
 
         def _write(self, status: int, body: dict[str, Any]) -> None:
             encoded = json.dumps(body, separators=(",", ":"), sort_keys=True).encode()

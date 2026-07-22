@@ -226,6 +226,30 @@ class LinodeComputeProvider:
         except (UnexpectedResponseError, RequestException) as error:
             raise ComputeActionUncertain(self._error_message(error)) from error
 
+    def reboot_runtime(
+        self,
+        provider_resource_id: str,
+        identity: ResourceIdentity,
+    ) -> None:
+        """Reboot an exactly owned Linode for Host lifecycle acceptance."""
+
+        resource_id = self._resource_id(provider_resource_id)
+        try:
+            client = cast(Any, self._client)
+            instance = client.load(Instance, resource_id)
+            observation = self._observation(instance)
+            if not identity.owns(observation.tags):
+                raise ComputeOwnershipMismatch(provider_resource_id)
+            instance.reboot()
+        except ApiError as error:
+            if error.status == 404:
+                raise ComputeResourceNotFound(provider_resource_id) from error
+            if self._is_transient(error.status):
+                raise ComputeActionUncertain(self._error_message(error)) from error
+            raise ComputeRequestRejected(self._error_message(error)) from error
+        except (UnexpectedResponseError, RequestException) as error:
+            raise ComputeActionUncertain(self._error_message(error)) from error
+
     def validate_runtime_spec(
         self,
         spec: RuntimeSpec,
