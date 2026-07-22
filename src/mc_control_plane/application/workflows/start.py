@@ -1,9 +1,14 @@
 """Advance the start workflow by one externally observable action."""
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import timedelta
 
+from mc_control_plane.application.host_protocol import (
+    HOST_AGENT_VERSION,
+    HOST_PROTOCOL_VERSION,
+)
 from mc_control_plane.application.ports.compute import (
     ComputeActionUncertain,
     ComputeLifecycle,
@@ -14,6 +19,12 @@ from mc_control_plane.application.ports.compute import (
     ComputeResourceNotFound,
     RuntimeCreateRequest,
     RuntimeObservation,
+)
+from mc_control_plane.application.ports.host import (
+    HostBootstrapError,
+    HostBootstrapProvider,
+    HostObservation,
+    HostObservationProvider,
 )
 from mc_control_plane.application.ports.persistence import UnitOfWorkFactory
 from mc_control_plane.application.ports.support import Clock
@@ -47,13 +58,19 @@ class StartWorkflow:
         compute: ComputeProvider,
         clock: Clock,
         system_id: str,
+        host_bootstrap: HostBootstrapProvider,
+        host_observations: HostObservationProvider,
         retry_delay: timedelta = timedelta(seconds=5),
+        host_freshness: timedelta = timedelta(seconds=30),
     ) -> None:
         self._unit_of_work = unit_of_work
         self._compute = compute
         self._clock = clock
         self._system_id = system_id
+        self._host_bootstrap = host_bootstrap
+        self._host_observations = host_observations
         self._retry_delay = retry_delay
+        self._host_freshness = host_freshness
 
     def reconcile(self, operation_id: str) -> ReconcileResult:
         operation, run = self._load(operation_id)
@@ -74,6 +91,8 @@ class StartWorkflow:
                 return self._create(operation, run)
             if step is StartStep.WAIT_PROVIDER:
                 return self._wait_provider(operation, run)
+            if step is StartStep.WAIT_HOST:
+                return self._wait_host(operation, run)
         except ComputeProviderUnavailable as error:
             latest, _ = self._load(operation_id)
             return self._retry(latest, "compute_provider_unavailable", str(error))
@@ -83,6 +102,9 @@ class StartWorkflow:
         except ComputeResourceNotFound as error:
             latest, _ = self._load(operation_id)
             return self._block(latest, "compute_resource_not_found", str(error))
+        except HostBootstrapError as error:
+            latest, _ = self._load(operation_id)
+            return self._block(latest, "host_bootstrap_failed", str(error))
 
         return self._result(operation, changed=False)
 
@@ -131,10 +153,15 @@ class StartWorkflow:
         )
         self._save_operation(attempted)
         identity = self._identity(run)
+        metadata = self._host_bootstrap.metadata_for(run, identity, self._clock.now())
 
         try:
             observation = self._compute.create_runtime(
-                RuntimeCreateRequest(identity=identity, spec=run.runtime_spec)
+                RuntimeCreateRequest(
+                    identity=identity,
+                    spec=run.runtime_spec,
+                    metadata_user_data=metadata,
+                )
             )
         except ComputeActionUncertain as error:
             retry = replace(
@@ -150,6 +177,47 @@ class StartWorkflow:
             return self._result(retry, changed=True)
 
         return self._record_runtime(attempted, run, observation)
+
+    def _wait_host(self, operation: Operation, run: Run) -> ReconcileResult:
+        observation = self._host_observations.get_for_run(run.id)
+        if observation is None or observation.observed_at is None:
+            return self._retry(operation, "host_not_observed", "waiting for Host enrollment")
+        if observation.protocol_version != HOST_PROTOCOL_VERSION:
+            return self._block(
+                operation,
+                "host_protocol_incompatible",
+                str(observation.protocol_version),
+            )
+        if observation.agent_version != HOST_AGENT_VERSION:
+            return self._block(
+                operation,
+                "host_agent_incompatible",
+                observation.agent_version,
+            )
+        if observation.status != "connected":
+            if observation.status == "enrolled":
+                return self._retry(operation, "host_not_connected", observation.status)
+            return self._block(operation, "host_status_invalid", observation.status)
+        age = self._clock.now() - observation.observed_at
+        if age < timedelta(0):
+            return self._block(operation, "host_clock_invalid", str(observation.observed_at))
+        if age > self._host_freshness:
+            return self._retry(operation, "host_observation_stale", str(age))
+        readiness_error = _host_foundation_error(observation)
+        if readiness_error is not None:
+            return self._block(operation, "host_capability_invalid", readiness_error)
+
+        completed = replace(
+            operation,
+            state=OperationState.SUCCEEDED,
+            step=StartStep.COMPLETE,
+            next_attempt_at=None,
+            last_error_code=None,
+            last_error_message=None,
+            updated_at=self._clock.now(),
+        )
+        self._save_operation(completed)
+        return self._result(completed, changed=True)
 
     def _wait_provider(self, operation: Operation, run: Run) -> ReconcileResult:
         with self._unit_of_work() as work:
@@ -339,3 +407,21 @@ def delete_owned_runtime(
         compute.delete_runtime(provider_resource_id, identity)
     except ComputeOwnershipMismatch as error:
         raise ResourceOwnershipMismatch(provider_resource_id) from error
+
+
+def _host_foundation_error(observation: HostObservation) -> str | None:
+    capabilities = observation.capabilities or {}
+    states = observation.service_states or {}
+    if capabilities.get("os_id") != "debian" or str(capabilities.get("os_version")) != "13":
+        return "expected Debian 13"
+    if re.match(r"^Python 3\.13(?:\.|\s|$)", str(capabilities.get("python"))) is None:
+        return "expected Python 3.13"
+    if re.match(r"^podman version 5\.4(?:\.|\s|$)", str(capabilities.get("podman"))) is None:
+        return "expected Podman 5.4"
+    if re.match(r"^restic 0\.18(?:\.|\s|$)", str(capabilities.get("restic"))) is None:
+        return "expected restic 0.18"
+    if capabilities.get("quadlet") is not True:
+        return "Quadlet generator unavailable"
+    if states.get("agent") != "active":
+        return "Host agent service is not active"
+    return None

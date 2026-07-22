@@ -123,7 +123,6 @@ def spec() -> RuntimeSpec:
         region="us-ord",
         instance_type="g6-standard-2",
         image="linode/ubuntu24.04",
-        container_image="itzg/minecraft-server:latest",
         firewall_id="12345",
     )
 
@@ -433,14 +432,12 @@ def test_preflight_requires_explicit_positive_firewall(
         region=spec.region,
         instance_type=spec.instance_type,
         image=spec.image,
-        container_image=spec.container_image,
         firewall_id=None,
     )
     invalid = RuntimeSpec(
         region=spec.region,
         instance_type=spec.instance_type,
         image=spec.image,
-        container_image=spec.container_image,
         firewall_id="-1",
     )
 

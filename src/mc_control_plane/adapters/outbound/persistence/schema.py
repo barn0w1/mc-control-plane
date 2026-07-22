@@ -181,4 +181,14 @@ MIGRATIONS = (
             """,
         ),
     ),
+    Migration(
+        version=3,
+        name="one_host_enrollment_per_run",
+        statements=(
+            """
+            CREATE UNIQUE INDEX uq_host_enrollments_run
+            ON host_enrollments(run_id)
+            """,
+        ),
+    ),
 )

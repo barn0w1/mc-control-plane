@@ -177,7 +177,6 @@ def test_gate2_check_runs_both_boot_sequences_and_cleans_up(
         region="jp-tyo-3",
         instance_type="g6-nanode-1",
         image="linode/debian13",
-        container_image="not-used-in-gate2",
         firewall_id="79203454",
     )
     bootstrap = HostBootstrapSpec(
@@ -250,7 +249,6 @@ def test_gate2_reports_operation_and_cleanup_failures_together(
         region="jp-tyo-3",
         instance_type="g6-nanode-1",
         image="linode/debian13",
-        container_image="not-used-in-gate2",
         firewall_id="79203454",
     )
     bootstrap = HostBootstrapSpec(

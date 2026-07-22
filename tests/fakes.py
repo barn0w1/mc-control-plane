@@ -11,6 +11,7 @@ from mc_control_plane.application.ports.compute import (
     RuntimeCreateRequest,
     RuntimeObservation,
 )
+from mc_control_plane.application.ports.host import HostObservation
 from mc_control_plane.domain.models import ResourceIdentity, resource_scope_tags
 
 
@@ -31,6 +32,19 @@ class SequenceIds:
 
     def new(self) -> str:
         return next(self._values)
+
+
+class FakeHostManager:
+    def __init__(self) -> None:
+        self.observations: dict[str, HostObservation] = {}
+        self.bootstrap_calls: list[str] = []
+
+    def metadata_for(self, run, identity, now) -> str:  # type: ignore[no-untyped-def]
+        self.bootstrap_calls.append(run.id)
+        return f"#cloud-config\nrun: {identity.run_id}\n"
+
+    def get_for_run(self, run_id: str) -> HostObservation | None:
+        return self.observations.get(run_id)
 
 
 class FakeComputeProvider:
@@ -89,6 +103,8 @@ class FakeComputeProvider:
         provider_resource_id: str,
         identity: ResourceIdentity,
     ) -> None:
+        if provider_resource_id not in self.resources:
+            raise ComputeResourceNotFound(provider_resource_id)
         if not identity.owns(self.resources[provider_resource_id].tags):
             raise ComputeOwnershipMismatch(provider_resource_id)
         del self.resources[provider_resource_id]

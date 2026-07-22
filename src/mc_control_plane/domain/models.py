@@ -48,11 +48,10 @@ class RuntimeSpec:
     region: str
     instance_type: str
     image: str
-    container_image: str
     firewall_id: str | None = None
 
     def __post_init__(self) -> None:
-        for field in ("region", "instance_type", "image", "container_image"):
+        for field in ("region", "instance_type", "image"):
             _require_text(getattr(self, field), field)
         if self.firewall_id is not None:
             _require_text(self.firewall_id, "firewall_id")

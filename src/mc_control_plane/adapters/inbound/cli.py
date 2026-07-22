@@ -1,11 +1,15 @@
 """Minimal CLI entrypoint for local control-plane administration."""
 
 import argparse
+import json
 import os
+import signal
 import sys
+import time
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 from mc_control_plane import __version__
@@ -25,13 +29,39 @@ from mc_control_plane.adapters.outbound.compute.linode_gate2 import (
     cleanup_linode_gate2_resources,
     run_linode_gate2_check,
 )
-from mc_control_plane.adapters.outbound.host import HostBootstrapSpec, artifact_sha256
-from mc_control_plane.adapters.outbound.persistence import HostProtocolStore, SQLiteDatabase
+from mc_control_plane.adapters.outbound.host import (
+    DurableHostManager,
+    DurableHostSettings,
+    HostBootstrapSpec,
+    StoredHostObservations,
+    artifact_sha256,
+    create_bootstrap_key,
+    load_bootstrap_key,
+)
+from mc_control_plane.adapters.outbound.persistence import (
+    HostProtocolStore,
+    SQLiteDatabase,
+    SQLiteUnitOfWorkFactory,
+)
+from mc_control_plane.application.commands.server_unit import (
+    CreateServerUnit,
+    RequestServerUnitCreation,
+)
+from mc_control_plane.application.commands.start import RequestStart, StartServerUnit
+from mc_control_plane.application.gate3_cleanup import cleanup_gate3_runtime
 from mc_control_plane.application.host_protocol import (
     HOST_AGENT_ARTIFACT_PATH,
     HOST_AGENT_VERSION,
 )
 from mc_control_plane.application.ports.compute import ComputeProviderError
+from mc_control_plane.application.ports.persistence import (
+    UnitOfWorkFactory as UnitOfWorkFactoryPort,
+)
+from mc_control_plane.application.queries.status import GetServerUnitStatus
+from mc_control_plane.application.reconciler import OperationReconciler
+from mc_control_plane.application.support import SystemClock, UuidGenerator
+from mc_control_plane.application.workflows.start import StartWorkflow
+from mc_control_plane.domain.errors import ControlPlaneError
 from mc_control_plane.domain.models import RuntimeSpec
 
 
@@ -41,6 +71,53 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     init_database = commands.add_parser("init-db", help="initialize or migrate the database")
     init_database.add_argument("database", type=Path)
+
+    bootstrap_key = commands.add_parser(
+        "host-bootstrap-key-create",
+        help="create a root-only Host enrollment derivation key",
+    )
+    bootstrap_key.add_argument("path", type=Path)
+
+    unit_create = commands.add_parser("server-unit-create", help="register a Server Unit")
+    unit_create.add_argument("--database", required=True, type=Path)
+    unit_create.add_argument("--id", required=True)
+    unit_create.add_argument("--name", required=True)
+    _add_runtime_spec_arguments(unit_create)
+
+    unit_start = commands.add_parser("server-unit-start", help="request a durable start")
+    unit_start.add_argument("--database", required=True, type=Path)
+    unit_start.add_argument("--server-unit-id", required=True)
+
+    unit_status = commands.add_parser("server-unit-status", help="show layered status as JSON")
+    unit_status.add_argument("--database", required=True, type=Path)
+    unit_status.add_argument("--server-unit-id", required=True)
+
+    reconciler = commands.add_parser(
+        "reconciler-run",
+        help="run the single-writer durable Operation reconciler",
+    )
+    reconciler.add_argument("--database", required=True, type=Path)
+    reconciler.add_argument("--host-bootstrap-key", required=True, type=Path)
+    reconciler.add_argument("--control-plane-url", required=True)
+    reconciler.add_argument("--agent-wheel", required=True, type=Path)
+    reconciler.add_argument("--fixture-image", required=True)
+    reconciler.add_argument("--system-id", default="mc-control-plane")
+    reconciler.add_argument("--interval-seconds", type=float, default=5.0)
+    reconciler.add_argument("--limit", type=int, default=32)
+    reconciler.add_argument("--once", action="store_true")
+    _add_ssh_key_argument(reconciler)
+
+    gate3_cleanup = commands.add_parser(
+        "linode-gate3-cleanup",
+        help="delete the exact active Run used by Gate 3 acceptance",
+    )
+    gate3_cleanup.add_argument("--database", required=True, type=Path)
+    gate3_cleanup.add_argument("--server-unit-id", required=True)
+    gate3_cleanup.add_argument("--system-id", default="mc-control-plane")
+    gate3_cleanup.add_argument("--timeout-seconds", type=float, default=600.0)
+    gate3_cleanup.add_argument("--poll-seconds", type=float, default=5.0)
+    gate3_cleanup.add_argument("--confirm-owned-delete", action="store_true")
+    _add_ssh_key_argument(gate3_cleanup)
 
     preflight = commands.add_parser(
         "linode-preflight",
@@ -112,11 +189,15 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _add_linode_arguments(parser: argparse.ArgumentParser) -> None:
+    _add_runtime_spec_arguments(parser)
+    _add_ssh_key_argument(parser)
+
+
+def _add_runtime_spec_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--region", required=True)
     parser.add_argument("--instance-type", required=True)
     parser.add_argument("--firewall-id", required=True)
     parser.add_argument("--image", default=DEBIAN_13_IMAGE)
-    _add_ssh_key_argument(parser)
 
 
 def _add_ssh_key_argument(parser: argparse.ArgumentParser) -> None:
@@ -134,7 +215,6 @@ def _runtime_spec(arguments: argparse.Namespace) -> RuntimeSpec:
         region=arguments.region,
         instance_type=arguments.instance_type,
         image=arguments.image,
-        container_image="not-used-in-gate1",
         firewall_id=arguments.firewall_id,
     )
 
@@ -157,6 +237,41 @@ def main(argv: Sequence[str] | None = None) -> int:
         database.migrate()
         print(f"initialized {arguments.database}")
         return 0
+    if arguments.command == "host-bootstrap-key-create":
+        try:
+            create_bootstrap_key(arguments.path)
+        except (OSError, ValueError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print(f"created Host bootstrap key: {arguments.path}")
+        return 0
+    if arguments.command in {"server-unit-create", "server-unit-start", "server-unit-status"}:
+        try:
+            database = SQLiteDatabase(arguments.database)
+            database.migrate()
+            unit_of_work = cast(UnitOfWorkFactoryPort, SQLiteUnitOfWorkFactory(database))
+            clock = SystemClock()
+            if arguments.command == "server-unit-create":
+                unit = RequestServerUnitCreation(unit_of_work, clock)(
+                    CreateServerUnit(arguments.id, arguments.name, _runtime_spec(arguments))
+                )
+                print(f"Server Unit created: id={unit.id} desired-state={unit.desired_state}")
+                return 0
+            if arguments.command == "server-unit-start":
+                accepted = RequestStart(unit_of_work, clock, UuidGenerator())(
+                    StartServerUnit(arguments.server_unit_id)
+                )
+                print(f"Start accepted: operation={accepted.operation_id} run={accepted.run_id}")
+                return 0
+            observations = StoredHostObservations(HostProtocolStore(database))
+            status = GetServerUnitStatus(unit_of_work, observations, clock)(
+                arguments.server_unit_id
+            )
+            print(json.dumps(status.as_dict(), indent=2, sort_keys=True))
+            return 0
+        except (ControlPlaneError, OSError, ValueError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
     if arguments.command == "host-api-serve":
         try:
             database = SQLiteDatabase(arguments.database)
@@ -205,8 +320,35 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    if arguments.command == "linode-gate3-cleanup" and not arguments.confirm_owned_delete:
+        print(
+            "refusing cleanup without --confirm-owned-delete",
+            file=sys.stderr,
+        )
+        return 2
     try:
+        if arguments.command == "reconciler-run":
+            return _run_reconciler(arguments)
         provider = _linode_provider(arguments)
+        if arguments.command == "linode-gate3-cleanup":
+            database = SQLiteDatabase(arguments.database)
+            database.migrate()
+            cleanup_result = cleanup_gate3_runtime(
+                cast(UnitOfWorkFactoryPort, SQLiteUnitOfWorkFactory(database)),
+                provider,
+                SystemClock(),
+                server_unit_id=arguments.server_unit_id,
+                system_id=arguments.system_id,
+                timeout_seconds=arguments.timeout_seconds,
+                poll_seconds=arguments.poll_seconds,
+                progress=lambda message: print(f"Gate 3: {message}"),
+            )
+            resources = ",".join(cleanup_result.deleted_resource_ids) or "none"
+            print(
+                "Gate 3 cleanup confirmed: "
+                f"run={cleanup_result.run_id or 'none'} resources={resources} absent=yes"
+            )
+            return 0
         if arguments.command == "linode-gate1-cleanup":
             deleted = cleanup_linode_gate1_resources(
                 provider,
@@ -315,9 +457,69 @@ def main(argv: Sequence[str] | None = None) -> int:
         ComputeProviderError,
         LinodeGate1CheckError,
         LinodeGate2CheckError,
+        ControlPlaneError,
         OSError,
         ValueError,
     ) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     raise AssertionError(f"unhandled command: {arguments.command}")
+
+
+def _run_reconciler(arguments: argparse.Namespace) -> int:
+    if arguments.interval_seconds <= 0 or arguments.limit <= 0:
+        raise ValueError("reconciler interval and limit must be positive")
+    database = SQLiteDatabase(arguments.database)
+    database.migrate()
+    store = HostProtocolStore(database)
+    unit_of_work = cast(UnitOfWorkFactoryPort, SQLiteUnitOfWorkFactory(database))
+    clock = SystemClock()
+    host = DurableHostManager(
+        store,
+        DurableHostSettings(
+            control_plane_url=arguments.control_plane_url,
+            agent_wheel=arguments.agent_wheel,
+            fixture_image=arguments.fixture_image,
+        ),
+        load_bootstrap_key(arguments.host_bootstrap_key),
+    )
+    workflow = StartWorkflow(
+        unit_of_work,
+        _linode_provider(arguments),
+        clock,
+        system_id=arguments.system_id,
+        host_bootstrap=host,
+        host_observations=host,
+    )
+    reconciler = OperationReconciler(unit_of_work, workflow, clock)
+    stopping = False
+
+    def request_stop(_signal: int, _frame: object) -> None:
+        nonlocal stopping
+        stopping = True
+
+    previous_term = signal.signal(signal.SIGTERM, request_stop)
+    previous_int = signal.signal(signal.SIGINT, request_stop)
+    try:
+        while not stopping:
+            cycle = reconciler.run_once(arguments.limit)
+            for result in cycle.results:
+                print(
+                    f"Reconciled: operation={result.operation_id} "
+                    f"state={result.state.value} step={result.step.value} changed={result.changed}"
+                )
+            for failure in cycle.failures:
+                print(
+                    f"Reconcile error: operation={failure.operation_id} "
+                    f"type={failure.error_type} message={failure.message}",
+                    file=sys.stderr,
+                )
+            if arguments.once:
+                break
+            deadline = time.monotonic() + arguments.interval_seconds
+            while not stopping and time.monotonic() < deadline:
+                time.sleep(min(0.2, deadline - time.monotonic()))
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
+        signal.signal(signal.SIGINT, previous_int)
+    return 0

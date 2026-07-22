@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from mc_control_plane.adapters.inbound.cli import main
@@ -89,3 +90,78 @@ def test_gate2_cleanup_requires_explicit_delete_confirmation(tmp_path: Path) -> 
     )
 
     assert result == 2
+
+
+def test_gate3_cleanup_requires_explicit_delete_confirmation(tmp_path: Path) -> None:
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA test")
+
+    result = main(
+        [
+            "linode-gate3-cleanup",
+            "--database",
+            str(tmp_path / "control.db"),
+            "--server-unit-id",
+            "survival",
+            "--ssh-public-key",
+            str(key),
+        ]
+    )
+
+    assert result == 2
+
+
+def test_server_unit_create_start_and_status_cli(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    database = tmp_path / "control.db"
+
+    created = main(
+        [
+            "server-unit-create",
+            "--database",
+            str(database),
+            "--id",
+            "survival",
+            "--name",
+            "Survival",
+            "--region",
+            "jp-tyo-3",
+            "--instance-type",
+            "g6-nanode-1",
+            "--firewall-id",
+            "79203454",
+        ]
+    )
+    started = main(
+        [
+            "server-unit-start",
+            "--database",
+            str(database),
+            "--server-unit-id",
+            "survival",
+        ]
+    )
+    capsys.readouterr()
+    status_result = main(
+        [
+            "server-unit-status",
+            "--database",
+            str(database),
+            "--server-unit-id",
+            "survival",
+        ]
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert created == started == status_result == 0
+    assert output["server_unit"]["id"] == "survival"
+    assert output["operation"]["state"] == "pending"
+    assert output["provider"] is None
+    assert output["host"] is None
+
+
+def test_host_bootstrap_key_cli_refuses_overwrite(tmp_path: Path) -> None:
+    key = tmp_path / "bootstrap.key"
+
+    assert main(["host-bootstrap-key-create", str(key)]) == 0
+    assert main(["host-bootstrap-key-create", str(key)]) == 1
+    assert key.stat().st_mode & 0o777 == 0o600

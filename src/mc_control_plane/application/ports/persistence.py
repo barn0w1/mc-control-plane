@@ -1,5 +1,6 @@
 """Persistence interfaces owned by the application."""
 
+from datetime import datetime
 from types import TracebackType
 from typing import Protocol, Self
 
@@ -21,6 +22,8 @@ class RunRepository(Protocol):
 
     def get_active(self, server_unit_id: str) -> Run | None: ...
 
+    def save(self, run: Run) -> None: ...
+
 
 class OperationRepository(Protocol):
     def add(self, operation: Operation) -> None: ...
@@ -28,6 +31,10 @@ class OperationRepository(Protocol):
     def get(self, operation_id: str) -> Operation | None: ...
 
     def get_active(self, server_unit_id: str) -> Operation | None: ...
+
+    def get_latest(self, server_unit_id: str) -> Operation | None: ...
+
+    def list_due(self, now: datetime, limit: int) -> list[Operation]: ...
 
     def save(self, operation: Operation) -> None: ...
 

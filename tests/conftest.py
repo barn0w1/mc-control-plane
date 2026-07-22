@@ -25,7 +25,6 @@ def runtime_spec() -> RuntimeSpec:
         region="us-ord",
         instance_type="g6-standard-2",
         image="linode/ubuntu24.04",
-        container_image="itzg/minecraft-server:latest",
         firewall_id="12345",
     )
 

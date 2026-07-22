@@ -12,7 +12,6 @@ def test_runtime_spec_rejects_empty_required_value() -> None:
             region="",
             instance_type="type",
             image="image",
-            container_image="container",
         )
 
 
@@ -44,7 +43,7 @@ def test_domain_datetime_must_be_timezone_aware() -> None:
     from mc_control_plane.domain.models import ServerUnit
     from mc_control_plane.domain.states import DesiredState
 
-    spec = RuntimeSpec(region="r", instance_type="t", image="i", container_image="c")
+    spec = RuntimeSpec(region="r", instance_type="t", image="i")
     with pytest.raises(InvalidModel):
         ServerUnit(
             id="unit",

@@ -35,7 +35,6 @@ def _datetime_text(value: datetime | None) -> str | None:
 def _runtime_spec_json(spec: RuntimeSpec) -> str:
     return json.dumps(
         {
-            "container_image": spec.container_image,
             "firewall_id": spec.firewall_id,
             "image": spec.image,
             "instance_type": spec.instance_type,
@@ -52,7 +51,6 @@ def _runtime_spec(value: str) -> RuntimeSpec:
         region=cast(str, raw["region"]),
         instance_type=cast(str, raw["instance_type"]),
         image=cast(str, raw["image"]),
-        container_image=cast(str, raw["container_image"]),
         firewall_id=cast(str | None, raw.get("firewall_id")),
     )
 
@@ -288,6 +286,26 @@ class SQLiteRunRepository:
         ).fetchone()
         return None if row is None else _run(row)
 
+    def save(self, run: Run) -> None:
+        cursor = self._connection.execute(
+            """
+            UPDATE runs
+            SET server_unit_id = ?, runtime_spec_json = ?, source_snapshot_id = ?,
+                started_at = ?, ended_at = ?
+            WHERE id = ?
+            """,
+            (
+                run.server_unit_id,
+                _runtime_spec_json(run.runtime_spec),
+                run.source_snapshot_id,
+                run.started_at.isoformat(),
+                _datetime_text(run.ended_at),
+                run.id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise KeyError(run.id)
+
 
 class SQLiteOperationRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
@@ -324,6 +342,33 @@ class SQLiteOperationRepository:
             (server_unit_id,),
         ).fetchone()
         return None if row is None else _operation(row)
+
+    def get_latest(self, server_unit_id: str) -> Operation | None:
+        row = self._connection.execute(
+            """
+            SELECT * FROM operations
+            WHERE server_unit_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (server_unit_id,),
+        ).fetchone()
+        return None if row is None else _operation(row)
+
+    def list_due(self, now: datetime, limit: int) -> list[Operation]:
+        if limit <= 0:
+            raise ValueError("operation query limit must be positive")
+        rows = self._connection.execute(
+            """
+            SELECT * FROM operations
+            WHERE state IN ('pending', 'running', 'retry_wait')
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+            ORDER BY COALESCE(next_attempt_at, created_at), created_at, id
+            LIMIT ?
+            """,
+            (now.isoformat(), limit),
+        ).fetchall()
+        return [_operation(row) for row in rows]
 
     def save(self, operation: Operation) -> None:
         cursor = self._connection.execute(

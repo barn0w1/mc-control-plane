@@ -98,6 +98,74 @@ class HostProtocolStore:
             expires_at=expires_at,
         )
 
+    def ensure_enrollment(
+        self,
+        *,
+        token: str,
+        run_id: str,
+        resource_identity: str,
+        expires_at: datetime,
+        now: datetime,
+    ) -> IssuedEnrollment:
+        """Persist a reproducible one-time credential without storing its plaintext."""
+        _aware(expires_at, "expires_at")
+        _aware(now, "now")
+        token = _text(token, "token")
+        run_id = _text(run_id, "run_id")
+        resource_identity = _text(resource_identity, "resource_identity")
+        if expires_at <= now:
+            raise ValueError("enrollment expiry must be in the future")
+        token_hash = _hash_secret(token)
+        enrollment_id = f"enrollment-{token_hash[:32]}"
+        connection = self._database.connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM host_enrollments WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                connection.execute(
+                    """
+                    INSERT INTO host_enrollments(
+                        id, token_hash, run_id, resource_identity, expires_at, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        enrollment_id,
+                        token_hash,
+                        run_id,
+                        resource_identity,
+                        expires_at.isoformat(),
+                        now.isoformat(),
+                    ),
+                )
+            else:
+                if row["token_hash"] != token_hash:
+                    raise HostEnrollmentError(
+                        "Host bootstrap key changed while the Run remained active"
+                    )
+                if row["resource_identity"] != resource_identity:
+                    raise HostEnrollmentError("derived enrollment identity does not match")
+                enrollment_id = cast(str, row["id"])
+                if row["consumed_at"] is None:
+                    connection.execute(
+                        "UPDATE host_enrollments SET expires_at = ? WHERE id = ?",
+                        (expires_at.isoformat(), enrollment_id),
+                    )
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return IssuedEnrollment(
+            enrollment_id=enrollment_id,
+            token=token,
+            run_id=run_id,
+            resource_identity=resource_identity,
+            expires_at=expires_at,
+        )
+
     def enroll(self, request: dict[str, Any], *, now: datetime) -> HostAgentObservation:
         _aware(now, "now")
         required = {
@@ -347,6 +415,17 @@ class HostProtocolStore:
         try:
             row = connection.execute(
                 "SELECT * FROM host_agents WHERE agent_id = ?", (agent_id,)
+            ).fetchone()
+            connection.commit()
+            return None if row is None else self._agent_from_row(row)
+        finally:
+            connection.close()
+
+    def get_agent_for_run(self, run_id: str) -> HostAgentObservation | None:
+        connection = self._database.connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM host_agents WHERE run_id = ?", (run_id,)
             ).fetchone()
             connection.commit()
             return None if row is None else self._agent_from_row(row)

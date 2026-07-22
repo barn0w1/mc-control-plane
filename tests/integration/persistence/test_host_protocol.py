@@ -162,6 +162,13 @@ def test_migration_adds_host_protocol_schema(database: SQLiteDatabase) -> None:
             ).fetchall()
         }
         assert {"host_enrollments", "host_agents", "host_commands"}.issubset(tables)
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 2
+        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 3
+        indexes = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            ).fetchall()
+        }
+        assert "uq_host_enrollments_run" in indexes
     finally:
         connection.close()

@@ -40,7 +40,6 @@ def spec() -> RuntimeSpec:
         region="us-ord",
         instance_type="g6-standard-2",
         image="linode/debian13",
-        container_image="not-used-in-gate1",
         firewall_id="12345",
     )
 
@@ -105,7 +104,6 @@ def test_gate1_check_rejects_non_debian_image_before_create(spec: RuntimeSpec) -
         region=spec.region,
         instance_type=spec.instance_type,
         image="linode/ubuntu24.04",
-        container_image=spec.container_image,
         firewall_id=spec.firewall_id,
     )
 

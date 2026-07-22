@@ -14,6 +14,7 @@ from mc_control_plane.application.ports.compute import (
     ComputeResourceNotFound,
     RuntimeObservation,
 )
+from mc_control_plane.application.ports.host import HostObservation
 from mc_control_plane.application.workflows.start import (
     StartWorkflow,
     delete_owned_runtime,
@@ -21,13 +22,30 @@ from mc_control_plane.application.workflows.start import (
 from mc_control_plane.domain.errors import ActiveRunExists, ResourceOwnershipMismatch
 from mc_control_plane.domain.models import ResourceIdentity, ServerUnit
 from mc_control_plane.domain.states import DesiredState, OperationState, StartStep
-from tests.fakes import FakeComputeProvider, MutableClock, SequenceIds
+from tests.fakes import FakeComputeProvider, FakeHostManager, MutableClock, SequenceIds
 
 
 def _add_server_unit(unit_of_work: SQLiteUnitOfWorkFactory, server_unit: ServerUnit) -> None:
     with unit_of_work() as work:
         work.server_units.add(server_unit)
         work.commit()
+
+
+def _workflow(
+    unit_of_work: SQLiteUnitOfWorkFactory,
+    compute: FakeComputeProvider,
+    clock: MutableClock,
+    host: FakeHostManager | None = None,
+) -> StartWorkflow:
+    manager = host or FakeHostManager()
+    return StartWorkflow(
+        unit_of_work,
+        compute,
+        clock,
+        system_id="main",
+        host_bootstrap=manager,
+        host_observations=manager,
+    )
 
 
 def test_start_request_reserves_run_and_rejects_duplicate(
@@ -60,7 +78,8 @@ def test_start_workflow_creates_once_and_advances_to_host_boundary(
         StartServerUnit(server_unit.id)
     )
     compute = FakeComputeProvider()
-    workflow = StartWorkflow(unit_of_work, compute, clock, system_id="main")
+    host = FakeHostManager()
+    workflow = _workflow(unit_of_work, compute, clock, host)
 
     assert workflow.reconcile(accepted.operation_id).step is StartStep.CREATE_RUNTIME
     assert workflow.reconcile(accepted.operation_id).step is StartStep.WAIT_PROVIDER
@@ -72,7 +91,29 @@ def test_start_workflow_creates_once_and_advances_to_host_boundary(
     assert result.step is StartStep.WAIT_HOST
     assert result.state is OperationState.RUNNING
     assert compute.create_count == 1
-    assert not workflow.reconcile(accepted.operation_id).changed
+    assert compute.resources["linode-1"].has_user_data is True
+
+    host.observations[accepted.run_id] = HostObservation(
+        run_id=accepted.run_id,
+        agent_id=f"agent-{accepted.run_id}",
+        protocol_version=1,
+        agent_version="0.1.1",
+        status="connected",
+        boot_id="boot-1",
+        capabilities={
+            "os_id": "debian",
+            "os_version": "13",
+            "python": "Python 3.13.5",
+            "podman": "podman version 5.4.2",
+            "restic": "restic 0.18.0",
+            "quadlet": True,
+        },
+        service_states={"agent": "active", "fixture": "not-found"},
+        observed_at=clock.now(),
+    )
+    completed = workflow.reconcile(accepted.operation_id)
+    assert completed.step is StartStep.COMPLETE
+    assert completed.state is OperationState.SUCCEEDED
 
 
 def test_uncertain_create_is_reobserved_and_adopted_after_restart(
@@ -86,7 +127,8 @@ def test_uncertain_create_is_reobserved_and_adopted_after_restart(
     )
     compute = FakeComputeProvider()
     compute.uncertain_next_create = True
-    workflow = StartWorkflow(unit_of_work, compute, clock, system_id="main")
+    host = FakeHostManager()
+    workflow = _workflow(unit_of_work, compute, clock, host)
 
     workflow.reconcile(accepted.operation_id)
     uncertain = workflow.reconcile(accepted.operation_id)
@@ -94,7 +136,7 @@ def test_uncertain_create_is_reobserved_and_adopted_after_restart(
     assert uncertain.step is StartStep.DISCOVER_RUNTIME
 
     clock.advance(timedelta(seconds=5))
-    restarted = StartWorkflow(unit_of_work, compute, clock, system_id="main")
+    restarted = _workflow(unit_of_work, compute, clock, host)
     adopted = restarted.reconcile(accepted.operation_id)
 
     assert adopted.step is StartStep.WAIT_PROVIDER
@@ -123,9 +165,7 @@ def test_existing_runtime_for_different_run_blocks_creation(
         )
     )
 
-    result = StartWorkflow(unit_of_work, compute, clock, system_id="main").reconcile(
-        accepted.operation_id
-    )
+    result = _workflow(unit_of_work, compute, clock).reconcile(accepted.operation_id)
 
     assert result.state is OperationState.BLOCKED
     assert compute.create_count == 0
@@ -141,7 +181,7 @@ def test_non_startable_compute_state_blocks_instead_of_waiting_forever(
         StartServerUnit(server_unit.id)
     )
     compute = FakeComputeProvider()
-    workflow = StartWorkflow(unit_of_work, compute, clock, system_id="main")
+    workflow = _workflow(unit_of_work, compute, clock)
     workflow.reconcile(accepted.operation_id)
     workflow.reconcile(accepted.operation_id)
     compute.set_status("linode-1", "billing_suspension", ComputeLifecycle.BLOCKED)
@@ -184,9 +224,7 @@ def test_provider_read_failure_is_persisted_for_retry(
     compute = FakeComputeProvider()
     compute.find_error = ComputeProviderUnavailable("temporary API failure")
 
-    result = StartWorkflow(unit_of_work, compute, clock, system_id="main").reconcile(
-        accepted.operation_id
-    )
+    result = _workflow(unit_of_work, compute, clock).reconcile(accepted.operation_id)
 
     assert result.state is OperationState.RETRY_WAIT
     assert result.step is StartStep.DISCOVER_RUNTIME
@@ -208,7 +246,7 @@ def test_definitive_create_rejection_blocks_with_attempt_recorded(
     )
     compute = FakeComputeProvider()
     compute.create_error = ComputeRequestRejected("invalid image")
-    workflow = StartWorkflow(unit_of_work, compute, clock, system_id="main")
+    workflow = _workflow(unit_of_work, compute, clock)
     workflow.reconcile(accepted.operation_id)
 
     result = workflow.reconcile(accepted.operation_id)
@@ -231,7 +269,7 @@ def test_missing_recorded_runtime_blocks_for_manual_review(
         StartServerUnit(server_unit.id)
     )
     compute = FakeComputeProvider()
-    workflow = StartWorkflow(unit_of_work, compute, clock, system_id="main")
+    workflow = _workflow(unit_of_work, compute, clock)
     workflow.reconcile(accepted.operation_id)
     workflow.reconcile(accepted.operation_id)
     compute.observe_error = ComputeResourceNotFound("linode-1")
