@@ -2,7 +2,7 @@
 
 - Implementation: Complete
 - Automated verification: Complete
-- Akamai Cloud live acceptance: Pending
+- Akamai Cloud live acceptance: Complete (2026-07-22)
 
 Gate 1の目的は、MinecraftやHost agentより前に、Control Planeが一つのDebian 13 Linodeを
 安全に作成、観測、削除できることを実accountで確認することである。通常testはcredentialも
@@ -102,13 +102,21 @@ token、SSH key内容、resourceのIP addressはcommitしない。
 InterfacesではHTTP 400になった。失敗時cleanupによりtest Linodeの不存在は確認された。
 
 この実測を受け、Firewall確認を各Linode Interfaceの公式endpointへ変更し、同じ誤りを再現する
-adapter testを追加した。live acceptance自体は修正版で再実行して成功するまでPendingとする。
+adapter testを追加した。
+
+同日の修正版による再試行では、同じregion/typeで`provisioning -> booting -> running`を観測し、
+Metadata、Linode Interface上のFirewall、Backup無効、local disk encryption無効をすべて確認した。
+check自身が所有Linodeを削除し、API上の不存在まで確認した。Cloud Managerのeventでも
+create、boot、Firewall関連付け、shutdown、deleteの順序とresourceが残っていないことを人間が確認した。
+
+`linode-gate1-cleanup`は正常系の後続stepではなく、checkが強制終了した場合の回収用である。check成功後に
+`resources=none absent=yes`となるのは正常である。回収時の`--system-id`はcheckで使用した値と完全に
+一致させる必要がある。
 
 ## Gate判定
 
-実装とcredential-free testは完了している。実accountのlive checkが成功し、人間がAkamai Cloud上に
-test Linodeが残っていないことを確認した時点でGate 1全体をCompleteとする。それまではGate 2の
-設計・local実装を進めてもよいが、Gate 2の実環境検証へGate 1の未確認事項を持ち込まない。
+実装、credential-free test、実accountのlive check、削除後の人間による確認が完了したため、
+Gate 1全体をCompleteとする。
 
 ## 公式資料
 

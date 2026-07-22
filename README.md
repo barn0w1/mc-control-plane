@@ -53,8 +53,8 @@ flowchart TD
 最初のproject骨格、domain model、SQLite persistence、start workflowのCompute確保部分、
 公式SDKを使うAkamai Cloud Compute adapterとGate 1 harnessまで実装しています。adapterは
 Debian 13/Metadata/Firewallのpreflight、cloud-init Metadata、所有tagによる検索、作成、状態観測、
-所有権限定の削除を実装済みです。credential-free testは完了し、実accountの明示的なlive
-acceptanceとHost制御は未実施です。
+所有権限定の削除を実装済みです。credential-free testと実accountのGate 1 live acceptanceは
+完了し、次はHost制御のGate 2を進めています。
 中期的には、Infra lifecycleとDebian 13 Host foundationをMinecraftより先に完成させ、
 その上で一つのServer Unitのstart、snapshot、stop、再restoreを一周させます。
 後方互換性はまだ要求せず、実装から得た知見に基づく破壊的変更を許容します。
