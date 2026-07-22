@@ -37,6 +37,22 @@ class ComputeActionUncertain(Exception):
     """The caller cannot know whether a mutating provider action succeeded."""
 
 
+class ComputeProviderError(Exception):
+    """Base class for normalized compute-provider failures."""
+
+
+class ComputeProviderUnavailable(ComputeProviderError):
+    """A read could not be completed and is safe to retry."""
+
+
+class ComputeRequestRejected(ComputeProviderError):
+    """The provider definitively rejected a request."""
+
+
+class ComputeResourceNotFound(ComputeProviderError):
+    """The requested provider resource no longer exists."""
+
+
 class ComputeProvider(Protocol):
     def find_by_server_unit(
         self, system_id: str, server_unit_id: str

@@ -7,7 +7,13 @@ from mc_control_plane.application.commands.start import (
     RequestStart,
     StartServerUnit,
 )
-from mc_control_plane.application.ports.compute import ComputeLifecycle, RuntimeObservation
+from mc_control_plane.application.ports.compute import (
+    ComputeLifecycle,
+    ComputeProviderUnavailable,
+    ComputeRequestRejected,
+    ComputeResourceNotFound,
+    RuntimeObservation,
+)
 from mc_control_plane.application.workflows.start import (
     StartWorkflow,
     delete_owned_runtime,
@@ -164,3 +170,72 @@ def test_delete_guard_never_deletes_resource_with_wrong_owner() -> None:
         delete_owned_runtime(compute, owner, "linode-1")
 
     assert compute.deleted == []
+
+
+def test_provider_read_failure_is_persisted_for_retry(
+    unit_of_work: SQLiteUnitOfWorkFactory,
+    server_unit: ServerUnit,
+    clock: MutableClock,
+) -> None:
+    _add_server_unit(unit_of_work, server_unit)
+    accepted = RequestStart(unit_of_work, clock, SequenceIds("run-1", "operation-1"))(
+        StartServerUnit(server_unit.id)
+    )
+    compute = FakeComputeProvider()
+    compute.find_error = ComputeProviderUnavailable("temporary API failure")
+
+    result = StartWorkflow(unit_of_work, compute, clock, system_id="main").reconcile(
+        accepted.operation_id
+    )
+
+    assert result.state is OperationState.RETRY_WAIT
+    assert result.step is StartStep.DISCOVER_RUNTIME
+    with unit_of_work() as work:
+        operation = work.operations.get(accepted.operation_id)
+        assert operation is not None
+        assert operation.last_error_code == "compute_provider_unavailable"
+        assert operation.next_attempt_at == clock.now() + timedelta(seconds=5)
+
+
+def test_definitive_create_rejection_blocks_with_attempt_recorded(
+    unit_of_work: SQLiteUnitOfWorkFactory,
+    server_unit: ServerUnit,
+    clock: MutableClock,
+) -> None:
+    _add_server_unit(unit_of_work, server_unit)
+    accepted = RequestStart(unit_of_work, clock, SequenceIds("run-1", "operation-1"))(
+        StartServerUnit(server_unit.id)
+    )
+    compute = FakeComputeProvider()
+    compute.create_error = ComputeRequestRejected("invalid image")
+    workflow = StartWorkflow(unit_of_work, compute, clock, system_id="main")
+    workflow.reconcile(accepted.operation_id)
+
+    result = workflow.reconcile(accepted.operation_id)
+
+    assert result.state is OperationState.BLOCKED
+    with unit_of_work() as work:
+        operation = work.operations.get(accepted.operation_id)
+        assert operation is not None
+        assert operation.attempt_count == 1
+        assert operation.last_error_code == "compute_request_rejected"
+
+
+def test_missing_recorded_runtime_blocks_for_manual_review(
+    unit_of_work: SQLiteUnitOfWorkFactory,
+    server_unit: ServerUnit,
+    clock: MutableClock,
+) -> None:
+    _add_server_unit(unit_of_work, server_unit)
+    accepted = RequestStart(unit_of_work, clock, SequenceIds("run-1", "operation-1"))(
+        StartServerUnit(server_unit.id)
+    )
+    compute = FakeComputeProvider()
+    workflow = StartWorkflow(unit_of_work, compute, clock, system_id="main")
+    workflow.reconcile(accepted.operation_id)
+    workflow.reconcile(accepted.operation_id)
+    compute.observe_error = ComputeResourceNotFound("linode-1")
+
+    result = workflow.reconcile(accepted.operation_id)
+
+    assert result.state is OperationState.BLOCKED

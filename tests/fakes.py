@@ -5,9 +5,11 @@ from datetime import datetime, timedelta
 from mc_control_plane.application.ports.compute import (
     ComputeActionUncertain,
     ComputeLifecycle,
+    ComputeProviderError,
     RuntimeCreateRequest,
     RuntimeObservation,
 )
+from mc_control_plane.domain.models import resource_scope_tags
 
 
 class MutableClock:
@@ -35,16 +37,20 @@ class FakeComputeProvider:
         self.create_count = 0
         self.deleted: list[str] = []
         self.uncertain_next_create = False
+        self.find_error: ComputeProviderError | None = None
+        self.create_error: ComputeProviderError | None = None
+        self.observe_error: ComputeProviderError | None = None
 
     def find_by_server_unit(self, system_id: str, server_unit_id: str) -> list[RuntimeObservation]:
-        required = {
-            f"mccp:system={system_id}",
-            f"mccp:server-unit={server_unit_id}",
-        }
+        if self.find_error is not None:
+            raise self.find_error
+        required = resource_scope_tags(system_id, server_unit_id)
         return [item for item in self.resources.values() if required.issubset(item.tags)]
 
     def create_runtime(self, request: RuntimeCreateRequest) -> RuntimeObservation:
         self.create_count += 1
+        if self.create_error is not None:
+            raise self.create_error
         provider_id = f"linode-{self.create_count}"
         observation = RuntimeObservation(
             provider_resource_id=provider_id,
@@ -61,6 +67,8 @@ class FakeComputeProvider:
         return observation
 
     def observe_runtime(self, provider_resource_id: str) -> RuntimeObservation:
+        if self.observe_error is not None:
+            raise self.observe_error
         return self.resources[provider_resource_id]
 
     def delete_runtime(self, provider_resource_id: str) -> None:

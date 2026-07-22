@@ -8,6 +8,9 @@ from mc_control_plane.application.ports.compute import (
     ComputeActionUncertain,
     ComputeLifecycle,
     ComputeProvider,
+    ComputeProviderUnavailable,
+    ComputeRequestRejected,
+    ComputeResourceNotFound,
     RuntimeCreateRequest,
     RuntimeObservation,
 )
@@ -63,12 +66,22 @@ class StartWorkflow:
         if operation.next_attempt_at is not None and operation.next_attempt_at > now:
             return self._result(operation, changed=False)
 
-        if step is StartStep.DISCOVER_RUNTIME:
-            return self._discover(operation, run)
-        if step is StartStep.CREATE_RUNTIME:
-            return self._create(operation, run)
-        if step is StartStep.WAIT_PROVIDER:
-            return self._wait_provider(operation, run)
+        try:
+            if step is StartStep.DISCOVER_RUNTIME:
+                return self._discover(operation, run)
+            if step is StartStep.CREATE_RUNTIME:
+                return self._create(operation, run)
+            if step is StartStep.WAIT_PROVIDER:
+                return self._wait_provider(operation, run)
+        except ComputeProviderUnavailable as error:
+            latest, _ = self._load(operation_id)
+            return self._retry(latest, "compute_provider_unavailable", str(error))
+        except ComputeRequestRejected as error:
+            latest, _ = self._load(operation_id)
+            return self._block(latest, "compute_request_rejected", str(error))
+        except ComputeResourceNotFound as error:
+            latest, _ = self._load(operation_id)
+            return self._block(latest, "compute_resource_not_found", str(error))
 
         return self._result(operation, changed=False)
 
@@ -280,6 +293,19 @@ class StartWorkflow:
         )
         self._save_operation(blocked)
         return self._result(blocked, changed=True)
+
+    def _retry(self, operation: Operation, code: str, message: str) -> ReconcileResult:
+        now = self._clock.now()
+        retry = replace(
+            operation,
+            state=OperationState.RETRY_WAIT,
+            next_attempt_at=now + self._retry_delay,
+            last_error_code=code,
+            last_error_message=message[:500],
+            updated_at=now,
+        )
+        self._save_operation(retry)
+        return self._result(retry, changed=True)
 
     def _save_operation(self, operation: Operation) -> None:
         with self._unit_of_work() as work:

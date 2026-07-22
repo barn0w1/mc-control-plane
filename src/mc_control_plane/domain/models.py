@@ -3,6 +3,7 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
+from hashlib import blake2s
 
 from mc_control_plane.domain.errors import InvalidModel
 from mc_control_plane.domain.states import (
@@ -22,6 +23,24 @@ def _require_text(value: str, field: str) -> None:
 def _require_aware(value: datetime, field: str) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise InvalidModel(f"{field} must be timezone-aware")
+
+
+def _resource_tag(kind: str, value: str) -> str:
+    """Build a stable provider-safe tag without exposing unbounded domain IDs."""
+    digest = blake2s(value.encode(), digest_size=12).hexdigest()
+    return f"mccp:{kind}={digest}"
+
+
+def resource_scope_tags(system_id: str, server_unit_id: str) -> frozenset[str]:
+    """Tags shared by all runs of one server unit."""
+    _require_text(system_id, "system_id")
+    _require_text(server_unit_id, "server_unit_id")
+    return frozenset(
+        {
+            _resource_tag("system", system_id),
+            _resource_tag("unit", server_unit_id),
+        }
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,13 +71,9 @@ class ResourceIdentity:
 
     @property
     def tags(self) -> frozenset[str]:
-        return frozenset(
-            {
-                f"mccp:system={self.system_id}",
-                f"mccp:server-unit={self.server_unit_id}",
-                f"mccp:run={self.run_id}",
-            }
-        )
+        return resource_scope_tags(self.system_id, self.server_unit_id) | {
+            _resource_tag("run", self.run_id)
+        }
 
     def owns(self, tags: Iterable[str]) -> bool:
         return self.tags.issubset(tags)

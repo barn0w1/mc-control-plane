@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "Control plane for ephemeral Minecraft multiplayer servers"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "linode-api4>=5.46.0,<6",
+    "requests>=2.34,<3",
+]
 
 [project.scripts]
 mc-control-plane = "mc_control_plane.adapters.inbound.cli:main"
