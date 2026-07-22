@@ -27,6 +27,10 @@ from mc_control_plane.adapters.outbound.compute.linode_gate2 import (
 )
 from mc_control_plane.adapters.outbound.host import HostBootstrapSpec, artifact_sha256
 from mc_control_plane.adapters.outbound.persistence import HostProtocolStore, SQLiteDatabase
+from mc_control_plane.application.host_protocol import (
+    HOST_AGENT_ARTIFACT_PATH,
+    HOST_AGENT_VERSION,
+)
 from mc_control_plane.application.ports.compute import ComputeProviderError
 from mc_control_plane.domain.models import RuntimeSpec
 
@@ -157,7 +161,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             database = SQLiteDatabase(arguments.database)
             database.migrate()
-            print(f"Serving Host API on {arguments.bind}:{arguments.port}")
+            print(
+                f"Serving Host API on {arguments.bind}:{arguments.port} "
+                f"artifact-path={HOST_AGENT_ARTIFACT_PATH}"
+            )
             serve_host_api(
                 HostApiApplication(HostProtocolStore(database)),
                 bind=arguments.bind,
@@ -270,9 +277,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 now=now,
             )
             wheel = arguments.agent_wheel.read_bytes()
-            artifact_url = (
-                arguments.control_plane_url.rstrip("/") + "/artifacts/mccp-host-agent-0.1.0.whl"
-            )
+            artifact_url = arguments.control_plane_url.rstrip("/") + HOST_AGENT_ARTIFACT_PATH
             bootstrap = HostBootstrapSpec(
                 control_plane_url=arguments.control_plane_url,
                 agent_id=agent_id,
@@ -281,12 +286,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 enrollment_token=issued.token,
                 agent_wheel_url=artifact_url,
                 agent_wheel_sha256=artifact_sha256(wheel),
-                agent_version="0.1.0",
+                agent_version=HOST_AGENT_VERSION,
                 fixture_image=arguments.fixture_image,
             )
             print(
                 "Starting billable Gate 2 check; the owned Linode will be rebooted and deleted. "
-                f"recovery-run-id={run_id} agent-id={agent_id}"
+                f"recovery-run-id={run_id} agent-id={agent_id} "
+                f"agent-version={HOST_AGENT_VERSION}"
             )
             gate2_result = run_linode_gate2_check(
                 provider,

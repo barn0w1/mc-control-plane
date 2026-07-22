@@ -445,6 +445,7 @@ class HostProtocolStore:
     def _command_from_row(row: sqlite3.Row | None) -> HostCommand:
         if row is None:
             raise HostProtocolError("command record is missing")
+        result = cast(str | None, row["result_json"])
         return HostCommand(
             command_id=cast(str, row["command_id"]),
             agent_id=cast(str, row["agent_id"]),
@@ -457,4 +458,5 @@ class HostProtocolStore:
             deadline=datetime.fromisoformat(cast(str, row["deadline"])),
             state=HostCommandState(cast(str, row["state"])),
             delivery_count=cast(int, row["delivery_count"]),
+            result=None if result is None else cast(dict[str, Any], json.loads(result)),
         )

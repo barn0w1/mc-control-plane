@@ -1,5 +1,6 @@
 """Credential-free coordinator for the Gate 2 Host acceptance sequence."""
 
+import json
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from time import sleep
@@ -103,12 +104,22 @@ def _wait_for_command(
         state = "absent" if command is None else command.state.value
         report(f"command poll {attempt + 1}/{attempts}: command={command_id} state={state}")
         if command is not None and command.state is HostCommandState.SUCCEEDED:
+            report(f"command result: command={command_id} {_result_summary(command.result)}")
             return
         if command is not None and command.state is HostCommandState.FAILED:
-            raise HostGate2Error(f"Host command failed: {command.kind.value}")
+            raise HostGate2Error(
+                f"Host command failed: {command.kind.value}; {_result_summary(command.result)}"
+            )
         if attempt + 1 < attempts:
             sleeper(poll_seconds)
     raise HostGate2Error(f"Host command did not finish before timeout: {command_id}")
+
+
+def _result_summary(result: dict[str, object] | None) -> str:
+    if result is None:
+        return "result=missing"
+    encoded = json.dumps(result, separators=(",", ":"), sort_keys=True)
+    return f"result={encoded[:2000]}"
 
 
 def _validate_capabilities(capabilities: dict[str, object], states: dict[str, object]) -> None:

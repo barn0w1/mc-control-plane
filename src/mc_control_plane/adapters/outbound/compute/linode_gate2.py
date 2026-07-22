@@ -127,14 +127,23 @@ def run_linode_gate2_check(
         )
     except BaseException as error:
         operation_error = error
+        report(f"operation failed: {type(error).__name__}: {error}; starting cleanup")
 
     try:
         _cleanup(provider, identity, tracked_ids, attempts, poll_seconds, sleeper, report)
     except BaseException as cleanup_error:
+        operation_detail = (
+            "none"
+            if operation_error is None
+            else f"{type(operation_error).__name__}: {operation_error}"
+        )
         raise LinodeGate2CleanupError(
-            "owned Gate 2 Linode cleanup could not be confirmed"
+            "owned Gate 2 Linode cleanup could not be confirmed; "
+            f"cleanup_error={type(cleanup_error).__name__}: {cleanup_error}; "
+            f"operation_error={operation_detail}"
         ) from cleanup_error
     if operation_error is not None:
+        report("cleanup completed after operation failure; returning the original error")
         raise operation_error.with_traceback(operation_error.__traceback__)
     return LinodeGate2Result(
         run_id=bootstrap.run_id,
@@ -271,8 +280,13 @@ def _cleanup(
             _pause(attempt, attempts, interval, sleeper)
         else:
             raise LinodeGate2CleanupError(f"resource {resource_id} remained after cleanup")
-    if _exact(provider, identity):
-        raise LinodeGate2CleanupError("owned Gate 2 resources remain")
+    for attempt in range(attempts):
+        remaining = _exact(provider, identity)
+        report(f"cleanup discovery poll {attempt + 1}/{attempts}: matches={len(remaining)}")
+        if not remaining:
+            return
+        _pause(attempt, attempts, interval, sleeper)
+    raise LinodeGate2CleanupError("owned Gate 2 resources remain discoverable")
 
 
 def _exact(provider: LinodeComputeProvider, identity: ResourceIdentity) -> list[RuntimeObservation]:

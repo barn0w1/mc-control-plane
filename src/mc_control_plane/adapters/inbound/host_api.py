@@ -13,6 +13,7 @@ from typing import Any, cast
 
 from mc_control_plane.adapters.outbound.persistence.host_protocol import HostProtocolStore
 from mc_control_plane.application.host_protocol import (
+    HOST_AGENT_ARTIFACT_PATH,
     HOST_PROTOCOL_VERSION,
     HostAuthenticationError,
     HostEnrollmentError,
@@ -150,7 +151,7 @@ def serve_host_api(
             self._write(response.status, response.body)
 
         def do_GET(self) -> None:
-            if self.path != "/artifacts/mccp-host-agent-0.1.0.whl" or agent_artifact is None:
+            if self.path != HOST_AGENT_ARTIFACT_PATH or agent_artifact is None:
                 self._write(HTTPStatus.NOT_FOUND, {"error": "not_found"})
                 return
             try:

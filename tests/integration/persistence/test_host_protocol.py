@@ -145,6 +145,11 @@ def test_command_is_redelivered_until_terminal_result_is_recorded(
     saved = store.get_command("command-1")
     assert saved is not None
     assert saved.state is HostCommandState.SUCCEEDED
+    assert saved.result == {
+        "error_code": None,
+        "message": None,
+        "observation": {"fixture": "installed"},
+    }
 
 
 def test_migration_adds_host_protocol_schema(database: SQLiteDatabase) -> None:

@@ -1,14 +1,20 @@
 from datetime import timedelta
 from typing import Any, cast
 
+import pytest
+
 from mc_control_plane.adapters.outbound.compute.linode import (
     LinodeComputeProvider,
     LinodeRuntimePreflight,
 )
-from mc_control_plane.adapters.outbound.compute.linode_gate2 import run_linode_gate2_check
+from mc_control_plane.adapters.outbound.compute.linode_gate2 import (
+    LinodeGate2CleanupError,
+    cleanup_linode_gate2_resources,
+    run_linode_gate2_check,
+)
 from mc_control_plane.adapters.outbound.host import HostBootstrapSpec
 from mc_control_plane.adapters.outbound.persistence import HostProtocolStore, SQLiteDatabase
-from mc_control_plane.application.ports.compute import ComputeLifecycle
+from mc_control_plane.application.ports.compute import ComputeLifecycle, RuntimeObservation
 from mc_control_plane.domain.models import ResourceIdentity, RuntimeSpec
 from tests.fakes import FakeComputeProvider, MutableClock
 
@@ -43,6 +49,45 @@ class Gate2FakeProvider(FakeComputeProvider):
         if not identity.owns(observation.tags):
             raise AssertionError("test resource ownership changed")
         self.rebooted = True
+
+
+class StaleListGate2Provider(Gate2FakeProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tombstone: RuntimeObservation | None = None
+        self.stale_reads = 0
+
+    def delete_runtime(
+        self,
+        provider_resource_id: str,
+        identity: ResourceIdentity,
+    ) -> None:
+        self.tombstone = self.observe_runtime(provider_resource_id)
+        super().delete_runtime(provider_resource_id, identity)
+        self.stale_reads = 2
+
+    def find_by_server_unit(
+        self,
+        system_id: str,
+        server_unit_id: str,
+    ) -> list[RuntimeObservation]:
+        found = super().find_by_server_unit(system_id, server_unit_id)
+        if not found and self.tombstone is not None and self.stale_reads > 0:
+            self.stale_reads -= 1
+            return [self.tombstone]
+        return found
+
+
+class PermanentStaleListGate2Provider(StaleListGate2Provider):
+    def find_by_server_unit(
+        self,
+        system_id: str,
+        server_unit_id: str,
+    ) -> list[RuntimeObservation]:
+        found = FakeComputeProvider.find_by_server_unit(self, system_id, server_unit_id)
+        if not found and self.tombstone is not None:
+            return [self.tombstone]
+        return found
 
 
 def _as_linode(provider: Gate2FakeProvider) -> LinodeComputeProvider:
@@ -143,7 +188,7 @@ def test_gate2_check_runs_both_boot_sequences_and_cleans_up(
         enrollment_token=enrollment.token,
         agent_wheel_url="https://control.example.test:8443/artifacts/agent.whl",
         agent_wheel_sha256="a" * 64,
-        agent_version="0.1.0",
+        agent_version="0.1.1",
         fixture_image=f"docker.io/library/alpine@sha256:{'b' * 64}",
     )
 
@@ -164,3 +209,79 @@ def test_gate2_check_runs_both_boot_sequences_and_cleans_up(
     assert provider.rebooted is True
     assert provider.resources == {}
     assert provider.deleted == ["linode-1"]
+
+
+def test_gate2_cleanup_waits_for_stale_discovery_results() -> None:
+    provider = StaleListGate2Provider()
+    identity = ResourceIdentity("mc-control-plane", "gate2-host-foundation", "gate2-stale")
+    provider.add(
+        RuntimeObservation(
+            provider_resource_id="linode-stale",
+            provider="akamai",
+            region="jp-tyo-3",
+            raw_status="running",
+            lifecycle=ComputeLifecycle.RUNNING,
+            tags=identity.tags,
+        )
+    )
+    sleeps: list[float] = []
+
+    deleted = cleanup_linode_gate2_resources(
+        _as_linode(provider),
+        system_id=identity.system_id,
+        run_id=identity.run_id,
+        timeout_seconds=5,
+        poll_seconds=1,
+        sleeper=sleeps.append,
+    )
+
+    assert deleted == ("linode-stale",)
+    assert provider.resources == {}
+    assert sleeps == [1, 1]
+
+
+def test_gate2_reports_operation_and_cleanup_failures_together(
+    database: SQLiteDatabase,
+    clock: MutableClock,
+) -> None:
+    provider = PermanentStaleListGate2Provider()
+    store = HostProtocolStore(database)
+    spec = RuntimeSpec(
+        region="jp-tyo-3",
+        instance_type="g6-nanode-1",
+        image="linode/debian13",
+        container_image="not-used-in-gate2",
+        firewall_id="79203454",
+    )
+    bootstrap = HostBootstrapSpec(
+        control_plane_url="https://control.example.test",
+        agent_id="agent-errors",
+        run_id="gate2-errors",
+        resource_identity="gate2-errors",
+        enrollment_token="unused-enrollment-token",
+        agent_wheel_url="https://control.example.test/artifacts/agent.whl",
+        agent_wheel_sha256="a" * 64,
+        agent_version="0.1.1",
+        fixture_image=f"docker.io/library/alpine@sha256:{'b' * 64}",
+    )
+
+    def advance(_seconds: float) -> None:
+        if provider.resources:
+            resource_id = next(iter(provider.resources))
+            provider.set_status(resource_id, "running", ComputeLifecycle.RUNNING)
+
+    with pytest.raises(LinodeGate2CleanupError) as captured:
+        run_linode_gate2_check(
+            _as_linode(provider),
+            store,
+            spec,
+            bootstrap,
+            timeout_seconds=2,
+            poll_seconds=1,
+            now=clock.now,
+            sleeper=advance,
+        )
+
+    message = str(captured.value)
+    assert "operation_error=HostGate2Error: Host agent did not connect" in message
+    assert "cleanup_error=LinodeGate2CleanupError" in message
