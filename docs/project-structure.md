@@ -32,7 +32,7 @@ src/mc_control_plane/
 │   │   └── cli/
 │   └── outbound/
 │       ├── persistence/
-│       ├── akamai/
+│       ├── compute/
 │       ├── host/
 │       └── restic/
 ├── config.py
@@ -159,11 +159,11 @@ flowchart TD
 
 この段階ではcloud accountへ接続しません。
 
-### Milestone 2: Akamai Cloud vertical slice
+### Milestone 2: Akamai Cloud vertical slice（進行中）
 
-1. `ComputeProvider`のAkamai adapterを実装する。
-2. 所有tagによる検索、create、status観測、deleteを実装する。
-3. fakeと実adapterへ共通のcontract testを適用する。
+1. `ComputeProvider`のAkamai adapterを実装する。（完了）
+2. 所有tagによる検索、create、status観測、deleteを実装する。（完了）
+3. 状態mapping、provider制約、error分類、安全条件を自動testする。（完了）
 4. test用Linode一つでcreate、再観測、deleteを手動実行するintegration testを用意する。
 
 Infrastructure全体を一度に実装せず、Linode lifecycleだけを接続します。
@@ -220,4 +220,5 @@ Milestone 1の完成条件は、実cloudを使わず次を自動testできるこ
 - 所有tagが一致しないresourceを削除しない。
 - 各stepの途中で再起動した想定でもworkflowを再開できる。
 
-この土台ができた時点でAkamai adapterへ進みます。
+この土台とAkamai adapterの自動testは完成しています。次はcredentialを通常testから分離した
+opt-in integration testを用意し、test用Linode一つで契約を確認します。

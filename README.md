@@ -35,11 +35,14 @@ flowchart TD
 - [ADR-0003: 信頼性と可用性の目標](docs/decisions/0003-reliability-scope.md)
 - [ADR-0004: Control Plane databaseにSQLiteを使用する](docs/decisions/0004-use-sqlite.md)
 - [ADR-0005: 永続化されたOperationを同期的に一stepずつ処理する](docs/decisions/0005-use-stepwise-reconciler.md)
+- [ADR-0006: 公式Linode SDKをCompute adapter内に隔離して使用する](docs/decisions/0006-use-official-linode-sdk.md)
 
 ## 現在の段階
 
-最初のproject骨格、domain model、SQLite persistence、Compute provider port、
-start workflowのCompute確保部分まで実装しています。実Akamai Cloud adapterはまだ接続していません。
+最初のproject骨格、domain model、SQLite persistence、start workflowのCompute確保部分、
+公式SDKを使うAkamai Cloud Compute adapterまで実装しています。adapterは所有tagによる検索、
+作成、状態観測、安全な削除を実装済みですが、実accountを変更するintegration testと
+cloud-init/Host制御はまだ接続していません。
 後方互換性はまだ要求せず、実装から得た知見に基づく破壊的変更を許容します。
 
 ## Development
