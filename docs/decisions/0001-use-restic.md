@@ -91,4 +91,4 @@ repositoryがlocal filesystemまたはSSHを中心としており、R2を直接b
 - [restic S3-compatible storage](https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html)
 - [restic 0.18 manual: `--insecure-no-password`](https://restic.readthedocs.io/en/v0.18.0/manual_rest.html)
 - [restic repository format: encryption and plaintext-hash indexing](https://restic.readthedocs.io/en/v0.18.0/100_references.html)
-- [Cloudflare R2 temporary credentials](https://developers.cloudflare.com/r2/api/s3/temporary-credentials/)
+- [Cloudflare R2 temporary credentials](https://developers.cloudflare.com/api/resources/r2/subresources/temporary_credentials/methods/create/)

@@ -20,7 +20,10 @@ Control Plane databaseとしてSQLiteを使用し、Python標準libraryの`sqlit
 - database fileはControl Planeと同じhostのlocal filesystemへ置く。
 - connectionごとに`PRAGMA foreign_keys = ON`を設定し、実際に有効になったことを確認する。
 - file databaseではWAL modeを使用する。
-- `busy_timeout`を設定するが、applicationとしてwriterは一つを前提とする。
+- `busy_timeout`を設定する。論理的なControl Planeは一つだが、Host APIとreconciler/CLIは同じhost上の
+  別processとして短時間だけwriterになりうる。
+- Host protocolの高頻度な短いtransactionは、`SQLITE_BUSY`、`SQLITE_BUSY_SNAPSHOT`、
+  `SQLITE_LOCKED`を一度だけ短く再試行する。解消しない場合はHTTP 503としてagentへ再試行させる。
 - transactionはUnit of Work単位で明示的にcommitまたはrollbackする。
 - active Runと未完了Operationはunique partial indexで保証する。
 - schema migrationはversion付きの小さなSQL migrationとしてrepository内で管理する。
@@ -55,6 +58,7 @@ database constraintへ依存します。
 ### Negative
 
 - writerは同時に一つなので、将来複数Control Planeへ拡張する用途には適さない。
+- WALでもwriter同士は直列化され、別processのtransactionが一時的にbusyとなる可能性は残る。
 - ORMを使わないためSQLとrow mappingを保守する必要がある。
 - WAL fileを含むdatabase fileをnetwork filesystem上で共有できない。
 - schema migration機能は必要最小限を自分たちで管理する必要がある。
@@ -73,4 +77,6 @@ database constraintへ依存します。
 - [Python 3.14 sqlite3 documentation](https://docs.python.org/3.14/library/sqlite3.html)
 - [SQLite partial indexes](https://www.sqlite.org/partialindex.html)
 - [SQLite write-ahead logging](https://www.sqlite.org/wal.html)
+- [SQLite `SQLITE_BUSY_SNAPSHOT`](https://www.sqlite.org/rescode.html#busy_snapshot)
+- [SQLite `busy_timeout`](https://www.sqlite.org/pragma.html#pragma_busy_timeout)
 - [SQLite foreign key support](https://www.sqlite.org/foreignkeys.html)

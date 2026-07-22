@@ -38,9 +38,9 @@ hashを使うため、この選択では失われない。
 - restic内部の暗号化処理はformatに必須であり、性能上のcostを完全には除去できない。
 - password付きで初期化済みのrepositoryを、この構成からそのまま開くことはできない。
 
-Gate 4 live acceptanceは未実施なので、正式なacceptance prefixは空password方式で新規作成する。
-旧開発版が作ったpassword付きtest repositoryに必要なsnapshotがある場合は、旧data root keyを保持した
-状態で別途migrationしてから切り替える。
+Gate 4 live acceptanceでは空password方式の新規prefixを使い、password promptなしでsnapshotとfresh
+Host restoreを完了した。旧開発版が作ったpassword付きtest repositoryに必要なsnapshotがある場合は、
+旧data root keyを保持した状態で別途migrationしてから切り替える。
 
 ## References
 

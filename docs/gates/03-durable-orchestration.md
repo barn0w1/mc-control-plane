@@ -145,8 +145,8 @@ uv run mc-control-plane linode-gate3-cleanup \
 ## Gate判定
 
 **Complete（2026-07-22）**。project ownerが同一Operation/Runのprocess中断・再開、Host ready、
-重複Linodeなし、明示cleanupで外部・DB双方のactive resourceがなくなることを確認した。次は
-[Gate 4 acceptance](04-data-lifecycle.md)でMinecraft導入前のdata lifecycleを検証する。
+重複Linodeなし、明示cleanupで外部・DB双方のactive resourceがなくなることを確認した。その後、
+[Gate 4 acceptance](04-data-lifecycle.md)も完了した。現在は次Gateへ進まず基盤checkpointとしている。
 
 ## 公式資料
 

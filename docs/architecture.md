@@ -97,8 +97,9 @@ Runのために確保したprovider resourceを表します。provider resource 
 ### Snapshot
 
 resticが作成し、commitまで確認できた復元可能な時点です。restic snapshot ID、対象Server Unit、
-作成元Run、種別、作成日時、検証状態を記録します。作成途中や失敗した試行はSnapshotではなく、
-`Operation`として記録します。
+作成元Run、種別、作成日時を記録します。`verified_at`は作成時には空で、別のfresh Hostへrestoreして
+内容digestが一致した時点だけを記録します。作成途中や失敗した試行はSnapshotではなく、`Operation`
+として記録します。
 
 ### Operation
 
@@ -239,7 +240,7 @@ project構成と具体的な実装順序は[Project structure](project-structure
 - [linode_api4-python](https://github.com/linode/linode_api4-python)
 - [Linode API OpenAPI specification](https://github.com/linode/linode-api-openapi)
 - [restic documentation](https://restic.readthedocs.io/en/stable/)
-- [Cloudflare R2 temporary credentials](https://developers.cloudflare.com/r2/api/s3/temporary-credentials/)
+- [Cloudflare R2 temporary credentials](https://developers.cloudflare.com/api/resources/r2/subresources/temporary_credentials/methods/create/)
 - [itzg/minecraft-server](https://github.com/itzg/docker-minecraft-server)
 - [Podman Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)
 - [Akamai Cloud Metadata service](https://techdocs.akamai.com/cloud-computing/docs/overview-of-the-metadata-service)
