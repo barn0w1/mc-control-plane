@@ -2,7 +2,7 @@
 
 - Implementation: Complete
 - Automated verification: Complete
-- Debian 13 / Akamai Cloud live acceptance: Pending
+- Debian 13 / Akamai Cloud live acceptance: Complete (2026-07-22)
 
 Gate 2はMinecraftを使わず、Debian 13 HostをSSHなしでbootstrap、認証、観測、制御できることを
 確認する。Gate 1と同様、live checkだけがLinodeの作成と課金を行い、成功・失敗のどちらでも完全な
@@ -145,6 +145,14 @@ uv run mc-control-plane linode-gate2-cleanup \
 credential-free testではenrollment再送・悪用拒否、command再配送、agent process再開、Quadlet生成順、
 cloud-init secret非表示、所有権付きreboot/deleteを検査している。実accountで上記checkが成功し、
 Cloud ManagerでもLinodeが残っていないことを人間が確認した時点でGate 2全体をCompleteとする。
+
+2026-07-22にRun `gate2-b5e296ad63db4f7cb55d1a0140a84108`、Linode `101126855`で
+この条件を満たした。最初のboot
+`ef4c842a-d9e7-4a83-b9d6-d5bea53d59e0`とreboot後のboot
+`cac3b820-7ade-4bb5-bfa5-b74d307d16a4`は異なり、両方でfixtureの
+`apply -> start -> observe -> stop -> reapply`が成功した。最後に直接観測が404となり、tag検索も
+`matches=0`となった。最終出力の`cleanup=confirmed`とCloud側のdelete eventを確認したため、
+Gate 2をCompleteとする。
 
 ## 実環境で判明した修正
 
