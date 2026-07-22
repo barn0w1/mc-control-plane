@@ -37,6 +37,7 @@ flowchart TD
 - [中期目標: Operational MVP](docs/operational-mvp.md)
 - [Gate 1: Infra lifecycle acceptance](docs/gates/01-infra-lifecycle.md)
 - [Gate 2: Host foundation acceptance](docs/gates/02-host-foundation.md)
+- [Gate 3: Durable orchestration acceptance](docs/gates/03-durable-orchestration.md)
 - [Project structure](docs/project-structure.md)
 - [State machines](docs/state-machines.md)
 - [ADR-0001: resticをバックアップエンジンに採用する](docs/decisions/0001-use-restic.md)
@@ -49,6 +50,7 @@ flowchart TD
 - [ADR-0008: 通常のHost制御にoutbound polling Host agentを使用する](docs/decisions/0008-use-outbound-host-agent.md)
 - [ADR-0009: 一時Linodeのlocal disk encryptionを無効にする](docs/decisions/0009-disable-local-disk-encryption.md)
 - [ADR-0010: versioned closed Host protocolとat-least-once配送を使用する](docs/decisions/0010-use-versioned-host-protocol.md)
+- [ADR-0011: Run単位でHost enrollment credentialを決定的に導出する](docs/decisions/0011-derive-run-enrollment.md)
 
 ## 現在の段階
 
@@ -56,8 +58,10 @@ flowchart TD
 公式SDKを使うAkamai Cloud Compute adapterとGate 1 harnessまで実装しています。adapterは
 Debian 13/Metadata/Firewallのpreflight、cloud-init Metadata、所有tagによる検索、作成、状態観測、
 所有権限定の削除を実装済みです。credential-free testと実accountのGate 1 live acceptanceは
-完了しています。Gate 2はHost protocol、Debian 13 cloud-init、Python 3.13 agent、fixture Quadlet、
-VM rebootを含むharnessとcredential-free testまで実装し、実accountのlive acceptance待ちです。
+完了しています。Gate 2もHost protocol、Debian 13 cloud-init、Python 3.13 agent、fixture Quadlet、
+VM reboot、実accountのlive acceptanceまで完了しています。Gate 3は永続reconciler、Run単位の
+再現可能なHost bootstrap、`WAIT_HOST`、操作・状態CLIを実装して自動testを通過し、実accountの
+live acceptance待ちです。
 中期的には、Infra lifecycleとDebian 13 Host foundationをMinecraftより先に完成させ、
 その上で一つのServer Unitのstart、snapshot、stop、再restoreを一周させます。
 後方互換性はまだ要求せず、実装から得た知見に基づく破壊的変更を許容します。
@@ -84,3 +88,5 @@ uv run mc-control-plane init-db ./control-plane.db
 [Gate 1 acceptance](docs/gates/01-infra-lifecycle.md)を確認してください。
 Debian HostとQuadletを検証するGate 2は[Gate 2 acceptance](docs/gates/02-host-foundation.md)を
 確認してください。
+永続workflowとprocess再開を検証するGate 3は
+[Gate 3 acceptance](docs/gates/03-durable-orchestration.md)を確認してください。

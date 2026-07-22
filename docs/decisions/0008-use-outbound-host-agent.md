@@ -58,8 +58,8 @@ sequenceDiagram
 
 ### Enrollment and authentication
 
-- cloud-init user dataにはControl Plane endpoint、run/resource identity、TLS server identityを
-  検証する情報、一回限り・短命のenrollment tokenだけを含める。
+- cloud-init user dataにはControl Plane endpoint、run/resource identity、TLS server
+  identityを検証する情報、一回限り・短命のenrollment tokenだけを含める。
 - enrollment tokenはrunと作成対象resourceへbindし、Control Plane databaseにはhashだけを保存する。
   成功時に即時無効化し、未使用でも短時間でexpireさせる。
 - enrollment後はrun専用の高entropy bearer credentialをHTTPS上で使用する。credentialもDBにはhash、
