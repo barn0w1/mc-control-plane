@@ -34,6 +34,7 @@ flowchart TD
 
 - [Architecture](docs/architecture.md)
 - [中期目標: Operational MVP](docs/operational-mvp.md)
+- [Gate 1: Infra lifecycle acceptance](docs/gates/01-infra-lifecycle.md)
 - [Project structure](docs/project-structure.md)
 - [State machines](docs/state-machines.md)
 - [ADR-0001: resticをバックアップエンジンに採用する](docs/decisions/0001-use-restic.md)
@@ -48,9 +49,10 @@ flowchart TD
 ## 現在の段階
 
 最初のproject骨格、domain model、SQLite persistence、start workflowのCompute確保部分、
-公式SDKを使うAkamai Cloud Compute adapterまで実装しています。adapterは所有tagによる検索、
-作成、状態観測、安全な削除を実装済みですが、実accountを変更するintegration testと
-cloud-init/Host制御はまだ接続していません。
+公式SDKを使うAkamai Cloud Compute adapterとGate 1 harnessまで実装しています。adapterは
+Debian 13/Metadata/Firewallのpreflight、cloud-init Metadata、所有tagによる検索、作成、状態観測、
+所有権限定の削除を実装済みです。credential-free testは完了し、実accountの明示的なlive
+acceptanceとHost制御は未実施です。
 中期的には、Infra lifecycleとDebian 13 Host foundationをMinecraftより先に完成させ、
 その上で一つのServer Unitのstart、snapshot、stop、再restoreを一周させます。
 後方互換性はまだ要求せず、実装から得た知見に基づく破壊的変更を許容します。
@@ -71,3 +73,6 @@ SQLite databaseを初期化するには次を実行します。
 ```bash
 uv run mc-control-plane init-db ./control-plane.db
 ```
+
+課金を伴うGate 1の実account検証は、通常の開発testから分離しています。実行前に
+[Gate 1 acceptance](docs/gates/01-infra-lifecycle.md)を確認してください。
