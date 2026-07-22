@@ -106,4 +106,79 @@ MIGRATIONS = (
             "CREATE INDEX ix_snapshots_server_unit_created ON snapshots(server_unit_id, created_at)",
         ),
     ),
+    Migration(
+        version=2,
+        name="host_protocol",
+        statements=(
+            """
+            CREATE TABLE host_enrollments (
+                id TEXT PRIMARY KEY,
+                token_hash TEXT NOT NULL UNIQUE,
+                run_id TEXT NOT NULL,
+                resource_identity TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                agent_id TEXT,
+                agent_token_hash TEXT,
+                created_at TEXT NOT NULL,
+                CHECK (
+                    (consumed_at IS NULL AND agent_id IS NULL AND agent_token_hash IS NULL)
+                    OR
+                    (consumed_at IS NOT NULL AND agent_id IS NOT NULL
+                     AND agent_token_hash IS NOT NULL)
+                )
+            )
+            """,
+            """
+            CREATE TABLE host_agents (
+                agent_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL UNIQUE,
+                resource_identity TEXT NOT NULL UNIQUE,
+                token_hash TEXT NOT NULL UNIQUE,
+                protocol_version INTEGER NOT NULL,
+                agent_version TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN ('enrolled', 'ready', 'incompatible', 'revoked')
+                ),
+                boot_id TEXT,
+                capabilities_json TEXT,
+                service_states_json TEXT,
+                enrolled_at TEXT NOT NULL,
+                observed_at TEXT,
+                revoked_at TEXT
+            )
+            """,
+            """
+            CREATE TABLE host_commands (
+                command_id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL REFERENCES host_agents(agent_id) ON DELETE RESTRICT,
+                run_id TEXT NOT NULL,
+                operation_id TEXT NOT NULL,
+                step TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN (
+                    'inspect_host', 'apply_fixture', 'start_fixture',
+                    'observe_fixture', 'stop_fixture'
+                )),
+                payload_version INTEGER NOT NULL CHECK (payload_version = 1),
+                payload_json TEXT NOT NULL,
+                deadline TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (
+                    state IN ('pending', 'delivered', 'succeeded', 'failed')
+                ),
+                delivery_count INTEGER NOT NULL DEFAULT 0 CHECK (delivery_count >= 0),
+                result_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX ix_host_commands_delivery
+            ON host_commands(agent_id, state, created_at)
+            """,
+            """
+            CREATE INDEX ix_host_enrollments_expiry
+            ON host_enrollments(expires_at, consumed_at)
+            """,
+        ),
+    ),
 )

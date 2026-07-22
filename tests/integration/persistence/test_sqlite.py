@@ -6,6 +6,7 @@ from mc_control_plane.adapters.outbound.persistence import (
     SQLiteDatabase,
     SQLiteUnitOfWorkFactory,
 )
+from mc_control_plane.adapters.outbound.persistence.schema import MIGRATIONS
 from mc_control_plane.domain.errors import PersistenceConflict
 from mc_control_plane.domain.models import Operation, Run, ServerUnit
 from mc_control_plane.domain.states import OperationKind, OperationState, StartStep
@@ -19,7 +20,9 @@ def test_migration_is_idempotent_and_enables_required_pragmas(database: SQLiteDa
     try:
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == len(
+            MIGRATIONS
+        )
     finally:
         connection.close()
 
