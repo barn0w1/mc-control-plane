@@ -1,0 +1,66 @@
+"""Persistence interfaces owned by the application."""
+
+from types import TracebackType
+from typing import Protocol, Self
+
+from mc_control_plane.domain.models import Operation, Run, RuntimeInstance, ServerUnit
+
+
+class ServerUnitRepository(Protocol):
+    def add(self, server_unit: ServerUnit) -> None: ...
+
+    def get(self, server_unit_id: str) -> ServerUnit | None: ...
+
+    def save(self, server_unit: ServerUnit) -> None: ...
+
+
+class RunRepository(Protocol):
+    def add(self, run: Run) -> None: ...
+
+    def get(self, run_id: str) -> Run | None: ...
+
+    def get_active(self, server_unit_id: str) -> Run | None: ...
+
+
+class OperationRepository(Protocol):
+    def add(self, operation: Operation) -> None: ...
+
+    def get(self, operation_id: str) -> Operation | None: ...
+
+    def get_active(self, server_unit_id: str) -> Operation | None: ...
+
+    def save(self, operation: Operation) -> None: ...
+
+
+class RuntimeInstanceRepository(Protocol):
+    def add(self, runtime: RuntimeInstance) -> None: ...
+
+    def get_active_for_run(self, run_id: str) -> RuntimeInstance | None: ...
+
+    def get_by_provider_id(self, provider_resource_id: str) -> RuntimeInstance | None: ...
+
+    def save(self, runtime: RuntimeInstance) -> None: ...
+
+
+class UnitOfWork(Protocol):
+    server_units: ServerUnitRepository
+    runs: RunRepository
+    operations: OperationRepository
+    runtime_instances: RuntimeInstanceRepository
+
+    def __enter__(self) -> Self: ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
+
+    def commit(self) -> None: ...
+
+    def rollback(self) -> None: ...
+
+
+class UnitOfWorkFactory(Protocol):
+    def __call__(self) -> UnitOfWork: ...

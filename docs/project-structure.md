@@ -17,7 +17,7 @@ src/mc_control_plane/
 │   ├── states.py
 │   └── errors.py
 ├── application/
-│   ├── commands.py
+│   ├── commands/
 │   ├── workflows/
 │   │   ├── start.py
 │   │   ├── stop.py
@@ -153,7 +153,7 @@ flowchart TD
 1. `src` layout、test、lint、type checkの入口を用意する。
 2. Domain model、state、errorを定義する。
 3. Portを必要最小限だけ定義する。
-4. in-memory repositoryとfake adapterを作る。
+4. SQLite repositoryとfake external adapterを作る。
 5. start workflowの「Run確保からCompute作成要求まで」をtestする。
 6. 同時start、create timeout、既存resource発見をscenario testする。
 
@@ -169,12 +169,12 @@ flowchart TD
 Infrastructure全体を一度に実装せず、Linode lifecycleだけを接続します。
 cloud-init、Host、resticはまだfakeのままにします。
 
-### Milestone 3: 永続化と再開
+### Milestone 3: Reconciler processと再開
 
-1. database schemaとmigrationを実装する。
-2. active Runと変更系Operationの一意制約を実装する。
+1. due Operationを一stepずつ進める単一reconciler loopを実装する。
+2. CLIからOperationを作成し、状態を読み取れるようにする。
 3. Control Planeをstep間で再起動しても再開できることをtestする。
-4. provider上の既存resourceをtagから再発見できることをtestする。
+4. process終了とgraceful shutdownを実装する。
 
 ### Milestone 4: Hostとrestore
 
@@ -193,12 +193,16 @@ cloud-init、Host、resticはまだfakeのままにします。
 CLIは各Milestoneを手動で動かせる薄い入口として早期に用意します。
 Discord adapterはstart/stop workflowが安定した後に追加します。
 
-## 6. 最初に決める必要がある技術判断
+## 6. 技術判断
 
-次の判断はproject skeletonを実装する前または同時に、短いADRとして決めます。
+次は決定済みです。
 
-- databaseとmigration手段
-- sync/async execution model
+- SQLiteとversion付きmigrationを使用する。
+- 同期application coreと、永続Operationを一stepずつ進める単一reconcilerを使用する。
+- task queue、message broker、複数writerは使用しない。
+
+次は必要になる直前に短いADRとして決めます。
+
 - workflowを起動するprocess modelとpolling方法
 - Hostとの通信protocol
 - configurationとsecretの供給方法

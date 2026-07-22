@@ -33,7 +33,28 @@ flowchart TD
 - [ADR-0001: resticをバックアップエンジンに採用する](docs/decisions/0001-use-restic.md)
 - [ADR-0002: Block Storage Volumeを使用しない](docs/decisions/0002-no-block-storage-volume.md)
 - [ADR-0003: 信頼性と可用性の目標](docs/decisions/0003-reliability-scope.md)
+- [ADR-0004: Control Plane databaseにSQLiteを使用する](docs/decisions/0004-use-sqlite.md)
+- [ADR-0005: 永続化されたOperationを同期的に一stepずつ処理する](docs/decisions/0005-use-stepwise-reconciler.md)
 
 ## 現在の段階
 
-設計初期段階です。後方互換性はまだ要求せず、実装から得た知見に基づく破壊的変更を許容します。
+最初のproject骨格、domain model、SQLite persistence、Compute provider port、
+start workflowのCompute確保部分まで実装しています。実Akamai Cloud adapterはまだ接続していません。
+後方互換性はまだ要求せず、実装から得た知見に基づく破壊的変更を許容します。
+
+## Development
+
+```bash
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+uv run pytest
+uv build
+```
+
+SQLite databaseを初期化するには次を実行します。
+
+```bash
+uv run mc-control-plane init-db ./control-plane.db
+```

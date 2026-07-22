@@ -5,3 +5,33 @@ description = "Control plane for ephemeral Minecraft multiplayer servers"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = []
+
+[project.scripts]
+mc-control-plane = "mc_control_plane.adapters.inbound.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.31,<0.12"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.0",
+    "pytest>=9.0.2",
+    "ruff>=0.15.2",
+]
+
+[tool.pytest.ini_options]
+addopts = ["--import-mode=importlib", "-ra"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+mypy_path = "src"
