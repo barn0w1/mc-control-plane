@@ -369,6 +369,7 @@ class HostProtocolStore:
         kind: HostCommandKind,
         deadline: datetime,
         now: datetime,
+        payload: dict[str, Any] | None = None,
     ) -> HostCommand:
         _aware(deadline, "deadline")
         _aware(now, "now")
@@ -382,13 +383,14 @@ class HostProtocolStore:
             ).fetchone()
             if agent is None:
                 raise HostProtocolError("cannot queue a command for an unknown agent")
+            durable_payload = {} if payload is None else payload
             connection.execute(
                 """
                 INSERT INTO host_commands(
                     command_id, agent_id, run_id, operation_id, step, kind,
                     payload_version, payload_json, deadline, state,
                     delivery_count, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 1, '{}', ?, 'pending', 0, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 'pending', 0, ?, ?)
                 """,
                 (
                     _text(command_id, "command_id"),
@@ -397,6 +399,7 @@ class HostProtocolStore:
                     _text(operation_id, "operation_id"),
                     _text(step, "step"),
                     kind.value,
+                    _json(durable_payload),
                     deadline.isoformat(),
                     now.isoformat(),
                     now.isoformat(),
@@ -407,6 +410,27 @@ class HostProtocolStore:
             ).fetchone()
             connection.commit()
             return self._command_from_row(row)
+        finally:
+            connection.close()
+
+    def server_unit_for_command(self, command_id: str) -> str:
+        """Resolve the durable ownership context without trusting command payload data."""
+
+        connection = self._database.connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT runs.server_unit_id
+                FROM host_commands
+                JOIN runs ON runs.id = host_commands.run_id
+                WHERE host_commands.command_id = ?
+                """,
+                (command_id,),
+            ).fetchone()
+            connection.commit()
+            if row is None:
+                raise HostProtocolError("data command has no Server Unit ownership context")
+            return cast(str, row["server_unit_id"])
         finally:
             connection.close()
 

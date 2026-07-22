@@ -15,11 +15,13 @@ from mc_control_plane.domain.models import (
     RuntimeInstance,
     RuntimeSpec,
     ServerUnit,
+    Snapshot,
 )
 from mc_control_plane.domain.states import (
     DesiredState,
     OperationKind,
     OperationState,
+    SnapshotKind,
     StartStep,
 )
 
@@ -134,6 +136,19 @@ def _runtime_instance(row: sqlite3.Row) -> RuntimeInstance:
         observed_at=observed_at,
         created_at=created_at,
         deleted_at=_datetime(_optional_text(row, "deleted_at")),
+    )
+
+
+def _snapshot(row: sqlite3.Row) -> Snapshot:
+    created_at = _datetime(_text(row, "created_at"))
+    assert created_at is not None
+    return Snapshot(
+        id=_text(row, "id"),
+        server_unit_id=_text(row, "server_unit_id"),
+        run_id=_optional_text(row, "run_id"),
+        kind=SnapshotKind(_text(row, "kind")),
+        created_at=created_at,
+        verified_at=_datetime(_optional_text(row, "verified_at")),
     )
 
 
@@ -464,6 +479,52 @@ class SQLiteRuntimeInstanceRepository:
         )
 
 
+class SQLiteSnapshotRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def add(self, snapshot: Snapshot) -> None:
+        try:
+            self._connection.execute(
+                """
+                INSERT INTO snapshots(
+                    id, server_unit_id, run_id, kind, created_at, verified_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snapshot.id,
+                    snapshot.server_unit_id,
+                    snapshot.run_id,
+                    snapshot.kind,
+                    snapshot.created_at.isoformat(),
+                    _datetime_text(snapshot.verified_at),
+                ),
+            )
+        except sqlite3.IntegrityError as error:
+            existing = self.get(snapshot.id)
+            if existing == snapshot:
+                return
+            raise PersistenceConflict(str(error)) from error
+
+    def get(self, snapshot_id: str) -> Snapshot | None:
+        row = self._connection.execute(
+            "SELECT * FROM snapshots WHERE id = ?", (snapshot_id,)
+        ).fetchone()
+        return None if row is None else _snapshot(row)
+
+    def get_latest(self, server_unit_id: str) -> Snapshot | None:
+        row = self._connection.execute(
+            """
+            SELECT * FROM snapshots
+            WHERE server_unit_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (server_unit_id,),
+        ).fetchone()
+        return None if row is None else _snapshot(row)
+
+
 class SQLiteUnitOfWork:
     def __init__(self, database: SQLiteDatabase) -> None:
         self._database = database
@@ -473,6 +534,7 @@ class SQLiteUnitOfWork:
         self.runs: SQLiteRunRepository
         self.operations: SQLiteOperationRepository
         self.runtime_instances: SQLiteRuntimeInstanceRepository
+        self.snapshots: SQLiteSnapshotRepository
 
     def __enter__(self) -> SQLiteUnitOfWork:
         if self._connection is not None:
@@ -482,6 +544,7 @@ class SQLiteUnitOfWork:
         self.runs = SQLiteRunRepository(self._connection)
         self.operations = SQLiteOperationRepository(self._connection)
         self.runtime_instances = SQLiteRuntimeInstanceRepository(self._connection)
+        self.snapshots = SQLiteSnapshotRepository(self._connection)
         return self
 
     def __exit__(

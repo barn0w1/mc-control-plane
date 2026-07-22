@@ -43,12 +43,19 @@ from mc_control_plane.adapters.outbound.persistence import (
     SQLiteDatabase,
     SQLiteUnitOfWorkFactory,
 )
+from mc_control_plane.adapters.outbound.storage import (
+    CloudflareTemporaryCredentialClient,
+    R2ResticLeaseBroker,
+    R2ResticSettings,
+    load_root_secret,
+)
 from mc_control_plane.application.commands.server_unit import (
     CreateServerUnit,
     RequestServerUnitCreation,
 )
 from mc_control_plane.application.commands.start import RequestStart, StartServerUnit
 from mc_control_plane.application.gate3_cleanup import cleanup_gate3_runtime
+from mc_control_plane.application.gate4 import Gate4Error, run_gate4_data_lifecycle
 from mc_control_plane.application.host_protocol import (
     HOST_AGENT_ARTIFACT_PATH,
     HOST_AGENT_VERSION,
@@ -77,6 +84,12 @@ def _parser() -> argparse.ArgumentParser:
         help="create a root-only Host enrollment derivation key",
     )
     bootstrap_key.add_argument("path", type=Path)
+
+    data_key = commands.add_parser(
+        "data-root-key-create",
+        help="create a root-only key for per-Server-Unit restic password derivation",
+    )
+    data_key.add_argument("path", type=Path)
 
     unit_create = commands.add_parser("server-unit-create", help="register a Server Unit")
     unit_create.add_argument("--database", required=True, type=Path)
@@ -160,6 +173,12 @@ def _parser() -> argparse.ArgumentParser:
     host_api.add_argument("--tls-certificate", type=Path)
     host_api.add_argument("--tls-private-key", type=Path)
     host_api.add_argument("--agent-wheel", required=True, type=Path)
+    host_api.add_argument("--r2-account-id")
+    host_api.add_argument("--r2-bucket")
+    host_api.add_argument("--r2-parent-access-key-id")
+    host_api.add_argument("--cloudflare-api-token-file", type=Path)
+    host_api.add_argument("--data-root-key", type=Path)
+    host_api.add_argument("--r2-lease-ttl-seconds", type=int, default=900)
 
     gate2 = commands.add_parser(
         "linode-gate2-check",
@@ -185,6 +204,22 @@ def _parser() -> argparse.ArgumentParser:
     gate2_cleanup.add_argument("--timeout-seconds", type=float, default=600.0)
     gate2_cleanup.add_argument("--poll-seconds", type=float, default=5.0)
     gate2_cleanup.add_argument("--confirm-owned-delete", action="store_true")
+
+    gate4 = commands.add_parser(
+        "linode-gate4-check",
+        help="run the three-Host restic/R2 data lifecycle acceptance check",
+    )
+    _add_linode_arguments(gate4)
+    gate4.add_argument("--database", required=True, type=Path)
+    gate4.add_argument("--server-unit-id", required=True)
+    gate4.add_argument("--host-bootstrap-key", required=True, type=Path)
+    gate4.add_argument("--control-plane-url", required=True)
+    gate4.add_argument("--agent-wheel", required=True, type=Path)
+    gate4.add_argument("--fixture-image", required=True)
+    gate4.add_argument("--system-id", default="mc-control-plane")
+    gate4.add_argument("--timeout-seconds", type=float, default=1800.0)
+    gate4.add_argument("--poll-seconds", type=float, default=5.0)
+    gate4.add_argument("--confirm-billable-three-host-check", action="store_true")
     return parser
 
 
@@ -237,13 +272,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         database.migrate()
         print(f"initialized {arguments.database}")
         return 0
-    if arguments.command == "host-bootstrap-key-create":
+    if arguments.command in {"host-bootstrap-key-create", "data-root-key-create"}:
         try:
             create_bootstrap_key(arguments.path)
         except (OSError, ValueError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
-        print(f"created Host bootstrap key: {arguments.path}")
+        label = (
+            "Host bootstrap" if arguments.command == "host-bootstrap-key-create" else "data root"
+        )
+        print(f"created {label} key: {arguments.path}")
         return 0
     if arguments.command in {"server-unit-create", "server-unit-start", "server-unit-status"}:
         try:
@@ -280,8 +318,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"Serving Host API on {arguments.bind}:{arguments.port} "
                 f"artifact-path={HOST_AGENT_ARTIFACT_PATH}"
             )
+            store = HostProtocolStore(database)
             serve_host_api(
-                HostApiApplication(HostProtocolStore(database)),
+                HostApiApplication(store, data_leases=_data_lease_broker(arguments, store)),
                 bind=arguments.bind,
                 port=arguments.port,
                 tls_certificate=arguments.tls_certificate,
@@ -326,10 +365,65 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    if arguments.command == "linode-gate4-check" and not (
+        arguments.confirm_billable_three_host_check
+    ):
+        print(
+            "refusing billable check without --confirm-billable-three-host-check",
+            file=sys.stderr,
+        )
+        return 2
     try:
         if arguments.command == "reconciler-run":
             return _run_reconciler(arguments)
         provider = _linode_provider(arguments)
+        if arguments.command == "linode-gate4-check":
+            database = SQLiteDatabase(arguments.database)
+            database.migrate()
+            store = HostProtocolStore(database)
+            unit_of_work = cast(UnitOfWorkFactoryPort, SQLiteUnitOfWorkFactory(database))
+            clock = SystemClock()
+            host = DurableHostManager(
+                store,
+                DurableHostSettings(
+                    control_plane_url=arguments.control_plane_url,
+                    agent_wheel=arguments.agent_wheel,
+                    fixture_image=arguments.fixture_image,
+                ),
+                load_bootstrap_key(arguments.host_bootstrap_key),
+            )
+            workflow = StartWorkflow(
+                unit_of_work,
+                provider,
+                clock,
+                system_id=arguments.system_id,
+                host_bootstrap=host,
+                host_observations=host,
+            )
+            print(
+                "Starting billable Gate 4 check; up to three sequential Linodes will be "
+                "created and deleted only after their data is safe."
+            )
+            gate4_result = run_gate4_data_lifecycle(
+                unit_of_work,
+                store,
+                provider,
+                OperationReconciler(unit_of_work, workflow, clock),
+                clock,
+                UuidGenerator(),
+                server_unit_id=arguments.server_unit_id,
+                system_id=arguments.system_id,
+                timeout_seconds=arguments.timeout_seconds,
+                poll_seconds=arguments.poll_seconds,
+                progress=lambda message: print(f"Gate 4: {message}"),
+            )
+            print(
+                "Gate 4 check passed: "
+                f"initial-snapshot={gate4_result.initial_snapshot_id} "
+                f"modified-snapshot={gate4_result.modified_snapshot_id} "
+                "fresh-host-restore=passed snapshot-before-delete=passed cleanup=confirmed"
+            )
+            return 0
         if arguments.command == "linode-gate3-cleanup":
             database = SQLiteDatabase(arguments.database)
             database.migrate()
@@ -457,6 +551,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ComputeProviderError,
         LinodeGate1CheckError,
         LinodeGate2CheckError,
+        Gate4Error,
         ControlPlaneError,
         OSError,
         ValueError,
@@ -464,6 +559,36 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
     raise AssertionError(f"unhandled command: {arguments.command}")
+
+
+def _data_lease_broker(
+    arguments: argparse.Namespace, store: HostProtocolStore
+) -> R2ResticLeaseBroker | None:
+    values = (
+        arguments.r2_account_id,
+        arguments.r2_bucket,
+        arguments.r2_parent_access_key_id,
+        arguments.cloudflare_api_token_file,
+        arguments.data_root_key,
+    )
+    if not any(value is not None for value in values):
+        return None
+    if not all(value is not None for value in values):
+        raise ValueError("all R2 data lease options must be provided together")
+    token = load_root_secret(arguments.cloudflare_api_token_file).decode().strip()
+    settings = R2ResticSettings(
+        arguments.r2_account_id,
+        arguments.r2_bucket,
+        arguments.r2_parent_access_key_id,
+        arguments.r2_lease_ttl_seconds,
+    )
+    client = CloudflareTemporaryCredentialClient(settings.account_id, token)
+    return R2ResticLeaseBroker(
+        store,
+        client,
+        settings,
+        load_root_secret(arguments.data_root_key),
+    )
 
 
 def _run_reconciler(arguments: argparse.Namespace) -> int:

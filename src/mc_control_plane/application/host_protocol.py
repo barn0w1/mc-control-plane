@@ -6,7 +6,7 @@ from enum import StrEnum
 from typing import Any
 
 HOST_PROTOCOL_VERSION = 1
-HOST_AGENT_VERSION = "0.1.1"
+HOST_AGENT_VERSION = "0.2.0"
 HOST_AGENT_ARTIFACT_PATH = f"/artifacts/mccp-host-agent-{HOST_AGENT_VERSION}.whl"
 
 
@@ -34,6 +34,19 @@ class HostCommandKind(StrEnum):
     START_FIXTURE = "start_fixture"
     OBSERVE_FIXTURE = "observe_fixture"
     STOP_FIXTURE = "stop_fixture"
+    INIT_DATA_REPOSITORY = "init_data_repository"
+    WRITE_DATA_FIXTURE = "write_data_fixture"
+    RESTORE_DATA = "restore_data"
+    SNAPSHOT_DATA = "snapshot_data"
+    OBSERVE_DATA = "observe_data"
+
+    @property
+    def requires_data_lease(self) -> bool:
+        return self in {
+            HostCommandKind.INIT_DATA_REPOSITORY,
+            HostCommandKind.RESTORE_DATA,
+            HostCommandKind.SNAPSHOT_DATA,
+        }
 
 
 class HostCommandState(StrEnum):

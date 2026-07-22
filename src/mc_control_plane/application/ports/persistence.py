@@ -4,7 +4,7 @@ from datetime import datetime
 from types import TracebackType
 from typing import Protocol, Self
 
-from mc_control_plane.domain.models import Operation, Run, RuntimeInstance, ServerUnit
+from mc_control_plane.domain.models import Operation, Run, RuntimeInstance, ServerUnit, Snapshot
 
 
 class ServerUnitRepository(Protocol):
@@ -49,11 +49,20 @@ class RuntimeInstanceRepository(Protocol):
     def save(self, runtime: RuntimeInstance) -> None: ...
 
 
+class SnapshotRepository(Protocol):
+    def add(self, snapshot: Snapshot) -> None: ...
+
+    def get(self, snapshot_id: str) -> Snapshot | None: ...
+
+    def get_latest(self, server_unit_id: str) -> Snapshot | None: ...
+
+
 class UnitOfWork(Protocol):
     server_units: ServerUnitRepository
     runs: RunRepository
     operations: OperationRepository
     runtime_instances: RuntimeInstanceRepository
+    snapshots: SnapshotRepository
 
     def __enter__(self) -> Self: ...
 

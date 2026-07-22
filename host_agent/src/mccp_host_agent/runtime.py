@@ -1,17 +1,21 @@
 """Fixed Host actions backed by systemd and Podman Quadlet."""
 
 import hashlib
+import json
 import os
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import TracebackType
 from typing import Protocol
 
 FIXTURE_UNIT = "mccp-gate2-fixture.service"
 FIXTURE_QUADLET = "mccp-gate2-fixture.container"
 AGENT_UNIT = "mccp-host-agent.service"
+RESTORE_MARKER = ".mccp-restored-snapshot"
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +32,7 @@ class CommandRunner(Protocol):
         *,
         timeout: float,
         environment: Mapping[str, str] | None = None,
+        cwd: Path | None = None,
     ) -> CompletedCommand: ...
 
 
@@ -38,6 +43,7 @@ class SubprocessCommandRunner:
         *,
         timeout: float,
         environment: Mapping[str, str] | None = None,
+        cwd: Path | None = None,
     ) -> CompletedCommand:
         result = subprocess.run(
             list(arguments),
@@ -46,6 +52,7 @@ class SubprocessCommandRunner:
             text=True,
             timeout=timeout,
             env=None if environment is None else dict(environment),
+            cwd=cwd,
         )
         return CompletedCommand(result.returncode, result.stdout, result.stderr)
 
@@ -64,11 +71,14 @@ class HostRuntime:
         runner: CommandRunner | None = None,
         quadlet_directory: Path = Path("/etc/containers/systemd"),
         generator: Path = Path("/usr/lib/systemd/system-generators/podman-system-generator"),
+        run_id: str = "local-test-run",
+        data_root: Path = Path("/var/lib/mc-control-plane-data"),
     ) -> None:
         self._fixture_image = fixture_image
         self._runner = runner or SubprocessCommandRunner()
         self._quadlet_directory = quadlet_directory
         self._generator = generator
+        self._run_directory = data_root / hashlib.sha256(run_id.encode()).hexdigest()
 
     def capabilities(self) -> dict[str, object]:
         os_release = self._os_release()
@@ -174,6 +184,154 @@ class HostRuntime:
             )
         return observation
 
+    def init_data_repository(self, lease: Mapping[str, object]) -> dict[str, object]:
+        with self._restic_environment(lease, required_permission="object-read-write") as env:
+            probe = self._run_restic(("restic", "cat", "config"), env, timeout=60)
+            if probe.returncode == 10:
+                self._checked(
+                    ("restic", "init", "--repository-version", "2"),
+                    timeout=120,
+                    environment=env,
+                    code="repository_init_failed",
+                )
+                state = "created"
+            elif probe.returncode == 0:
+                state = "existing"
+            else:
+                raise HostActionError(
+                    "repository_probe_failed", self._restic_error(probe, "repository probe failed")
+                )
+        return {"repository": "ready", "state": state}
+
+    def write_data_fixture(self, revision: str) -> dict[str, object]:
+        if revision not in {"initial", "modified"}:
+            raise HostActionError("fixture_revision_invalid", "unknown data fixture revision")
+        data = self._data_directory(require_empty=False)
+        data.mkdir(mode=0o700, parents=True, exist_ok=True)
+        target = data / "gate4-fixture.json"
+        target.write_text(
+            json.dumps({"gate": 4, "revision": revision}, separators=(",", ":")) + "\n"
+        )
+        target.chmod(0o600)
+        return self.observe_data()
+
+    def snapshot_data(self, command_id: str, lease: Mapping[str, object]) -> dict[str, object]:
+        data = self._data_directory(require_empty=False)
+        if not data.is_dir():
+            raise HostActionError("data_missing", "Run data directory does not exist")
+        idempotency_tag = "mccp-command-" + hashlib.sha256(command_id.encode()).hexdigest()
+        with self._restic_environment(lease, required_permission="object-read-write") as env:
+            existing = self._run_restic(
+                ("restic", "snapshots", "--json", "--tag", idempotency_tag),
+                env,
+                timeout=120,
+            )
+            if existing.returncode != 0:
+                raise HostActionError(
+                    "snapshot_lookup_failed",
+                    self._restic_error(existing, "snapshot idempotency lookup failed"),
+                )
+            existing_id = self._existing_snapshot_id(existing.stdout)
+            if existing_id is not None:
+                return {"snapshot_id": existing_id, "reused": True, **self.observe_data()}
+            result = self._run_restic(
+                (
+                    "restic",
+                    "backup",
+                    "--json",
+                    "--host",
+                    "mc-control-plane",
+                    "--tag",
+                    "mc-control-plane",
+                    "--tag",
+                    idempotency_tag,
+                    "--exclude",
+                    f"/{RESTORE_MARKER}",
+                    ".",
+                ),
+                env,
+                timeout=1800,
+                cwd=data,
+            )
+        if result.returncode != 0:
+            code = "snapshot_partial" if result.returncode == 3 else "snapshot_failed"
+            raise HostActionError(code, self._restic_error(result, code))
+        snapshot_id = self._snapshot_id(result.stdout)
+        return {"snapshot_id": snapshot_id, "reused": False, **self.observe_data()}
+
+    def restore_data(self, snapshot_id: str, lease: Mapping[str, object]) -> dict[str, object]:
+        if not snapshot_id or any(character not in "0123456789abcdef" for character in snapshot_id):
+            raise HostActionError(
+                "snapshot_id_invalid", "snapshot ID must be lowercase hexadecimal"
+            )
+        if len(snapshot_id) < 8 or len(snapshot_id) > 64:
+            raise HostActionError("snapshot_id_invalid", "snapshot ID length is invalid")
+        data = self._data_directory(require_empty=False)
+        marker = data / RESTORE_MARKER
+        if data.exists() and any(data.iterdir()):
+            try:
+                restored_id = marker.read_text().strip()
+            except OSError:
+                restored_id = ""
+            if restored_id == snapshot_id:
+                return {"snapshot_id": snapshot_id, "reused": True, **self.observe_data()}
+            raise HostActionError("restore_target_not_empty", "restore target is not empty")
+        staging = self._run_directory / ".restore-staging"
+        if staging.is_symlink():
+            raise HostActionError("unsafe_data_path", "restore staging path is a symlink")
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir(mode=0o700, parents=True)
+        try:
+            with self._restic_environment(lease, required_permission="object-read-only") as env:
+                result = self._run_restic(
+                    (
+                        "restic",
+                        "--no-lock",
+                        "restore",
+                        f"{snapshot_id}:/",
+                        "--target",
+                        str(staging),
+                    ),
+                    env,
+                    timeout=1800,
+                )
+            if result.returncode != 0:
+                raise HostActionError(
+                    "restore_failed", self._restic_error(result, "restore failed")
+                )
+            (staging / RESTORE_MARKER).write_text(snapshot_id + "\n")
+            (staging / RESTORE_MARKER).chmod(0o600)
+            if data.exists():
+                data.rmdir()
+            staging.replace(data)
+        except BaseException:
+            if staging.exists() and not staging.is_symlink():
+                shutil.rmtree(staging)
+            raise
+        return {"snapshot_id": snapshot_id, "reused": False, **self.observe_data()}
+
+    def observe_data(self) -> dict[str, object]:
+        data = self._data_directory(require_empty=False)
+        if not data.exists():
+            return {"data_state": "absent", "file_count": 0, "content_sha256": None}
+        digest = hashlib.sha256()
+        count = 0
+        for path in sorted(data.rglob("*")):
+            if path == data / RESTORE_MARKER:
+                continue
+            if path.is_symlink() or not path.is_file():
+                raise HostActionError("unsafe_data_path", "Run data contains a non-file entry")
+            relative = path.relative_to(data).as_posix()
+            digest.update(relative.encode() + b"\0")
+            digest.update(path.read_bytes())
+            count += 1
+        return {
+            "data_state": "ready",
+            "file_count": count,
+            "content_sha256": digest.hexdigest(),
+        }
+
     def _service_state(self, unit: str) -> str:
         return self._state_from_details(self._service_details(unit))
 
@@ -243,9 +401,10 @@ class HostRuntime:
         timeout: float,
         code: str,
         environment: Mapping[str, str] | None = None,
+        cwd: Path | None = None,
     ) -> None:
         try:
-            result = self._runner.run(arguments, timeout=timeout, environment=environment)
+            result = self._runner.run(arguments, timeout=timeout, environment=environment, cwd=cwd)
         except (OSError, subprocess.SubprocessError) as error:
             raise HostActionError(code, f"{arguments[0]} could not run") from error
         if result.returncode != 0:
@@ -253,6 +412,74 @@ class HostRuntime:
                 result.stderr.strip().splitlines()[-1][:300] if result.stderr.strip() else code
             )
             raise HostActionError(code, message)
+
+    def _data_directory(self, *, require_empty: bool) -> Path:
+        self._run_directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if self._run_directory.is_symlink():
+            raise HostActionError("unsafe_data_path", "Run data root is a symlink")
+        self._run_directory.mkdir(mode=0o700, exist_ok=True)
+        data = self._run_directory / "data"
+        if data.is_symlink():
+            raise HostActionError("unsafe_data_path", "Run data path is a symlink")
+        if require_empty and data.exists() and any(data.iterdir()):
+            raise HostActionError("restore_target_not_empty", "restore target is not empty")
+        return data
+
+    def _restic_environment(
+        self, lease: Mapping[str, object], *, required_permission: str
+    ) -> "_ResticEnvironment":
+        return _ResticEnvironment(lease, required_permission)
+
+    def _run_restic(
+        self,
+        arguments: Sequence[str],
+        environment: Mapping[str, str],
+        *,
+        timeout: float,
+        cwd: Path | None = None,
+    ) -> CompletedCommand:
+        try:
+            return self._runner.run(arguments, timeout=timeout, environment=environment, cwd=cwd)
+        except (OSError, subprocess.SubprocessError) as error:
+            raise HostActionError("restic_execution_failed", "restic could not run") from error
+
+    @staticmethod
+    def _snapshot_id(output: str) -> str:
+        for line in reversed(output.splitlines()):
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict) and value.get("message_type") == "summary":
+                snapshot_id = value.get("snapshot_id")
+                if isinstance(snapshot_id, str) and snapshot_id:
+                    return snapshot_id
+        raise HostActionError("snapshot_id_missing", "restic success omitted snapshot ID")
+
+    @staticmethod
+    def _existing_snapshot_id(output: str) -> str | None:
+        try:
+            value = json.loads(output)
+        except json.JSONDecodeError as error:
+            raise HostActionError(
+                "snapshot_lookup_invalid", "restic snapshots returned invalid JSON"
+            ) from error
+        if not isinstance(value, list):
+            raise HostActionError(
+                "snapshot_lookup_invalid", "restic snapshots returned an invalid document"
+            )
+        ids = [item.get("id") for item in value if isinstance(item, dict)]
+        valid = [item for item in ids if isinstance(item, str) and item]
+        if len(valid) > 1:
+            raise HostActionError(
+                "snapshot_idempotency_conflict", "multiple snapshots use one command identity"
+            )
+        return valid[0] if valid else None
+
+    @staticmethod
+    def _restic_error(result: CompletedCommand, fallback: str) -> str:
+        message = result.stderr.strip().splitlines()
+        return (message[-1] if message else fallback)[:300]
 
     def _quadlet(self) -> str:
         return (
@@ -268,3 +495,50 @@ class HostRuntime:
             "TimeoutStartSec=180\n"
             "TimeoutStopSec=120\n"
         )
+
+
+class _ResticEnvironment:
+    def __init__(self, lease: Mapping[str, object], required_permission: str) -> None:
+        required = {
+            "schema_version",
+            "repository",
+            "access_key_id",
+            "secret_access_key",
+            "session_token",
+            "restic_password",
+            "permission",
+            "expires_at",
+        }
+        if set(lease) != required or lease.get("schema_version") != 1:
+            raise HostActionError("data_lease_invalid", "data lease fields are invalid")
+        values = {name: lease.get(name) for name in required - {"schema_version"}}
+        if not all(isinstance(value, str) and value for value in values.values()):
+            raise HostActionError("data_lease_invalid", "data lease values are invalid")
+        if values["permission"] != required_permission:
+            raise HostActionError("data_lease_permission", "data lease permission is insufficient")
+        self._temporary = tempfile.TemporaryDirectory(prefix="mccp-restic-")
+        password = Path(self._temporary.name) / "password"
+        password.write_text(str(values["restic_password"]) + "\n")
+        password.chmod(0o600)
+        self.environment = {
+            **os.environ,
+            "RESTIC_REPOSITORY": str(values["repository"]),
+            "RESTIC_PASSWORD_FILE": str(password),
+            "AWS_ACCESS_KEY_ID": str(values["access_key_id"]),
+            "AWS_SECRET_ACCESS_KEY": str(values["secret_access_key"]),
+            "AWS_SESSION_TOKEN": str(values["session_token"]),
+            "AWS_DEFAULT_REGION": "auto",
+            "AWS_REGION": "auto",
+            "AWS_EC2_METADATA_DISABLED": "true",
+        }
+
+    def __enter__(self) -> Mapping[str, str]:
+        return self.environment
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self._temporary.cleanup()

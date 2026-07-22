@@ -56,10 +56,19 @@ class HostAgent:
             raise ValueError("Control Plane protocol version is incompatible")
         self._journal.mark_reported([item.command_id for item in pending])
         command = response.get("command")
+        data_lease = response.get("data_lease")
         if command is not None:
             if not isinstance(command, dict) or not all(isinstance(key, str) for key in command):
                 raise ValueError("Control Plane returned an invalid command")
-            self._handle(cast(dict[str, Any], command))
+            if data_lease is not None and (
+                not isinstance(data_lease, dict)
+                or not all(isinstance(key, str) for key in data_lease)
+            ):
+                raise ValueError("Control Plane returned an invalid data lease")
+            self._handle(
+                cast(dict[str, Any], command),
+                None if data_lease is None else cast(dict[str, Any], data_lease),
+            )
             return 0
         delay = response.get("poll_after_seconds", self._config.poll_seconds)
         if not isinstance(delay, int) or delay <= 0 or delay > 300:
@@ -109,7 +118,7 @@ class HostAgent:
             raise ValueError("agent credential is invalid")
         return token
 
-    def _handle(self, command: dict[str, Any]) -> None:
+    def _handle(self, command: dict[str, Any], data_lease: dict[str, Any] | None = None) -> None:
         required = {
             "command_id",
             "run_id",
@@ -127,7 +136,7 @@ class HostAgent:
                 raise ValueError(f"command {field} is invalid")
         if command["run_id"] != self._config.run_id:
             raise ValueError("command run identity does not match")
-        if command["payload_version"] != 1 or command["payload"] != {}:
+        if command["payload_version"] != 1 or not isinstance(command["payload"], dict):
             raise ValueError("command payload is not supported")
         deadline = datetime.fromisoformat(cast(str, command["deadline"]))
         if deadline.tzinfo is None or deadline.utcoffset() is None or deadline <= datetime.now(UTC):
@@ -141,7 +150,12 @@ class HostAgent:
         if saved is not None:
             return
         try:
-            observation = self._execute(cast(str, command["kind"]))
+            observation = self._execute(
+                command_id,
+                cast(str, command["kind"]),
+                cast(dict[str, Any], command["payload"]),
+                data_lease,
+            )
             result: dict[str, Any] = {
                 "command_id": command_id,
                 "state": "succeeded",
@@ -159,7 +173,13 @@ class HostAgent:
             }
         self._journal.complete(command_id, result)
 
-    def _execute(self, kind: str) -> dict[str, object]:
+    def _execute(
+        self,
+        command_id: str,
+        kind: str,
+        payload: dict[str, Any],
+        data_lease: dict[str, Any] | None,
+    ) -> dict[str, object]:
         actions = {
             "inspect_host": self._runtime.inspect,
             "apply_fixture": self._runtime.apply_fixture,
@@ -167,8 +187,24 @@ class HostAgent:
             "observe_fixture": self._runtime.observe_fixture,
             "stop_fixture": self._runtime.stop_fixture,
         }
-        try:
-            action = actions[kind]
-        except KeyError as error:
-            raise ValueError("unknown command kind") from error
-        return action()
+        if kind in actions:
+            if payload or data_lease is not None:
+                raise ValueError("fixture command must not include payload or data lease")
+            return actions[kind]()
+        if kind == "write_data_fixture":
+            if set(payload) != {"server_unit_id", "revision"} or data_lease is not None:
+                raise ValueError("write data fixture payload is invalid")
+            return self._runtime.write_data_fixture(cast(str, payload["revision"]))
+        if kind == "observe_data":
+            if set(payload) != {"server_unit_id"} or data_lease is not None:
+                raise ValueError("observe data payload is invalid")
+            return self._runtime.observe_data()
+        if data_lease is None:
+            raise ValueError("data command requires an ephemeral lease")
+        if kind == "init_data_repository" and set(payload) == {"server_unit_id"}:
+            return self._runtime.init_data_repository(data_lease)
+        if kind == "snapshot_data" and set(payload) == {"server_unit_id"}:
+            return self._runtime.snapshot_data(command_id, data_lease)
+        if kind == "restore_data" and set(payload) == {"server_unit_id", "snapshot_id"}:
+            return self._runtime.restore_data(cast(str, payload["snapshot_id"]), data_lease)
+        raise ValueError("unknown command kind or invalid payload")

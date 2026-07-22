@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from mc_control_plane.adapters.outbound.persistence.host_protocol import HostProtocolStore
+from mc_control_plane.application.data_lease import DataLeaseProvider, DataLeaseUnavailable
 from mc_control_plane.application.host_protocol import (
     HOST_AGENT_ARTIFACT_PATH,
     HOST_PROTOCOL_VERSION,
@@ -39,12 +40,14 @@ class HostApiApplication:
         *,
         now: Callable[[], datetime] | None = None,
         poll_after_seconds: int = 5,
+        data_leases: DataLeaseProvider | None = None,
     ) -> None:
         if poll_after_seconds <= 0:
             raise ValueError("poll interval must be positive")
         self._store = store
         self._now = now or (lambda: datetime.now(UTC))
         self._poll_after_seconds = poll_after_seconds
+        self._data_leases = data_leases
 
     def handle(
         self,
@@ -66,15 +69,26 @@ class HostApiApplication:
             if path == "/v1/host/poll":
                 token = self._bearer_token(authorization)
                 command = self._store.poll(token, body, now=self._now())
+                lease = None
+                if command is not None and command.kind.requires_data_lease:
+                    if self._data_leases is None:
+                        raise DataLeaseUnavailable("data lease provider is not configured")
+                    lease = self._data_leases.issue_for(command, self._now()).wire_value()
                 return HostApiResponse(
                     HTTPStatus.OK,
                     {
                         "protocol_version": HOST_PROTOCOL_VERSION,
                         "command": None if command is None else command.wire_value(),
+                        "data_lease": lease,
                         "poll_after_seconds": self._poll_after_seconds,
                     },
                 )
             return HostApiResponse(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+        except DataLeaseUnavailable:
+            return HostApiResponse(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"error": "data_lease_unavailable"},
+            )
         except HostAuthenticationError:
             return HostApiResponse(
                 HTTPStatus.UNAUTHORIZED,

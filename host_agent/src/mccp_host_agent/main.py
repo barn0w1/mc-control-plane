@@ -39,7 +39,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             token_path=state / "agent-token",
             journal=CommandJournal(state / "journal.db"),
             client=HostApiClient(config.control_plane_url, ca_file=config.ca_file),
-            runtime=HostRuntime(config.fixture_image),
+            runtime=HostRuntime(config.fixture_image, run_id=config.run_id),
         )
         if arguments.once:
             agent.run_once()

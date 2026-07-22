@@ -118,6 +118,7 @@ def _bootstrap_script(spec: HostBootstrapSpec) -> str:
 set -eu
 umask 077
 install -d -m 0700 /var/lib/mc-control-plane-agent
+install -d -m 0700 /var/lib/mc-control-plane-data
 install -d -m 0755 /etc/containers/systemd
 python_version=$(python3 -c 'import platform; print(platform.python_version())')
 podman_version=$(podman --version)
@@ -168,7 +169,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
-ReadWritePaths=/etc/mc-control-plane-agent /etc/containers/systemd /var/lib/mc-control-plane-agent
+ReadWritePaths=/etc/mc-control-plane-agent /etc/containers/systemd /var/lib/mc-control-plane-agent /var/lib/mc-control-plane-data
 UMask=0077
 
 [Install]
