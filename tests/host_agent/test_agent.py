@@ -28,6 +28,8 @@ class FakeClient:
 class FakeRuntime:
     def __init__(self) -> None:
         self.applies = 0
+        self.minecraft_applies: list[dict[str, object]] = []
+        self.minecraft_snapshots: list[tuple[str, dict[str, Any]]] = []
 
     def boot_id(self) -> str:
         return "boot-1"
@@ -53,6 +55,23 @@ class FakeRuntime:
 
     def stop_fixture(self) -> dict[str, object]:
         return {"fixture": "inactive"}
+
+    def apply_minecraft(self, **values: object) -> dict[str, object]:
+        self.minecraft_applies.append(values)
+        return {"minecraft": "stopped"}
+
+    def start_minecraft(self) -> dict[str, object]:
+        return {"minecraft": "ready"}
+
+    def observe_minecraft(self) -> dict[str, object]:
+        return {"minecraft": "ready"}
+
+    def stop_minecraft(self) -> dict[str, object]:
+        return {"minecraft": "stopped"}
+
+    def snapshot_minecraft_data(self, command_id: str, lease: dict[str, Any]) -> dict[str, object]:
+        self.minecraft_snapshots.append((command_id, lease))
+        return {"snapshot_id": "a" * 64}
 
 
 def _command() -> dict[str, Any]:
@@ -127,3 +146,47 @@ def test_redelivered_completed_command_is_not_executed_again(tmp_path: Path) -> 
     agent.run_once()
 
     assert runtime.applies == 1
+
+
+def test_agent_dispatches_closed_minecraft_commands(tmp_path: Path) -> None:
+    runtime = FakeRuntime()
+    agent = HostAgent(
+        AgentConfig(
+            control_plane_url="https://control.example.test",
+            agent_id="agent-1",
+            run_id="run-1",
+            resource_identity="resource-1",
+            enrollment_token=None,
+            fixture_image=IMAGE,
+        ),
+        config_path=tmp_path / "config.json",
+        token_path=tmp_path / "agent-token",
+        journal=CommandJournal(tmp_path / "journal.db"),
+        client=FakeClient(),  # type: ignore[arg-type]
+        runtime=runtime,  # type: ignore[arg-type]
+    )
+    applied = agent._execute(
+        "command-1",
+        "apply_minecraft",
+        {
+            "server_unit_id": "survival",
+            "image": "docker.io/itzg/minecraft-server@sha256:" + "b" * 64,
+            "minecraft_version": "1.21.8",
+            "paper_build": "42",
+            "memory": "512M",
+            "eula": True,
+        },
+        None,
+    )
+    lease = {"permission": "object-read-write"}
+    snapshotted = agent._execute(
+        "command-2",
+        "snapshot_minecraft",
+        {"server_unit_id": "survival"},
+        lease,
+    )
+
+    assert applied == {"minecraft": "stopped"}
+    assert runtime.minecraft_applies[0]["paper_build"] == "42"
+    assert snapshotted == {"snapshot_id": "a" * 64}
+    assert runtime.minecraft_snapshots == [("command-2", lease)]

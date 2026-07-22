@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -15,8 +16,15 @@ from typing import Protocol
 FIXTURE_UNIT = "mccp-gate2-fixture.service"
 FIXTURE_QUADLET = "mccp-gate2-fixture.container"
 AGENT_UNIT = "mccp-host-agent.service"
+MINECRAFT_UNIT = "mccp-minecraft.service"
+MINECRAFT_QUADLET = "mccp-minecraft.container"
+MINECRAFT_CONTAINER = "mccp-minecraft"
 RESTORE_MARKER = ".mccp-restored-snapshot"
 RESTIC = ("restic", "--insecure-no-password")
+_DIGEST_IMAGE = re.compile(r"^[a-z0-9][a-z0-9._:/-]+@sha256:[0-9a-f]{64}$")
+_MINECRAFT_VERSION = re.compile(r"^[0-9]+\.[0-9]+(?:\.[0-9]+)?$")
+_PAPER_BUILD = re.compile(r"^[1-9][0-9]*$")
+_MEMORY = re.compile(r"^[1-9][0-9]*(?:M|G)$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,27 +115,39 @@ class HostRuntime:
         return {
             "agent": self._service_state(AGENT_UNIT),
             "fixture": self._service_state(FIXTURE_UNIT),
+            "minecraft": str(self.observe_minecraft()["minecraft"]),
         }
 
     def inspect(self) -> dict[str, object]:
         agent = self._service_details(AGENT_UNIT)
         fixture = self._service_details(FIXTURE_UNIT)
+        minecraft = self._minecraft_observation()
         return {
             "boot_id": self.boot_id(),
             "capabilities": self.capabilities(),
             "service_states": {
                 "agent": self._state_from_details(agent),
                 "fixture": self._state_from_details(fixture),
+                "minecraft": minecraft["minecraft"],
             },
-            "service_details": {"agent": agent, "fixture": fixture},
+            "service_details": {
+                "agent": agent,
+                "fixture": fixture,
+                "minecraft": minecraft["systemd"],
+            },
+            "minecraft": minecraft,
         }
 
     def apply_fixture(self) -> dict[str, object]:
         content = self._quadlet()
         revision = hashlib.sha256(content.encode()).hexdigest()
+        self._install_quadlet(content, FIXTURE_QUADLET, FIXTURE_UNIT)
+        return {**self._fixture_observation(), "revision": revision}
+
+    def _install_quadlet(self, content: str, filename: str, unit: str) -> None:
         with tempfile.TemporaryDirectory(prefix="mccp-quadlet-") as temporary:
             staging = Path(temporary)
-            (staging / FIXTURE_QUADLET).write_text(content)
+            (staging / filename).write_text(content)
             environment = {**os.environ, "QUADLET_UNIT_DIRS": str(staging)}
             self._checked(
                 (str(self._generator), "--dryrun"),
@@ -140,7 +160,7 @@ class HostRuntime:
                     "systemd-analyze",
                     "--generators=true",
                     "verify",
-                    FIXTURE_UNIT,
+                    unit,
                 ),
                 timeout=30,
                 environment=environment,
@@ -148,13 +168,12 @@ class HostRuntime:
             )
 
         self._quadlet_directory.mkdir(mode=0o755, parents=True, exist_ok=True)
-        destination = self._quadlet_directory / FIXTURE_QUADLET
+        destination = self._quadlet_directory / filename
         temporary_destination = destination.with_name(f".{destination.name}.new")
         temporary_destination.write_text(content)
         temporary_destination.chmod(0o644)
         temporary_destination.replace(destination)
         self._checked(("systemctl", "daemon-reload"), timeout=30, code="daemon_reload_failed")
-        return {**self._fixture_observation(), "revision": revision}
 
     def start_fixture(self) -> dict[str, object]:
         self._checked(
@@ -184,6 +203,111 @@ class HostRuntime:
                 f"fixture service is {final_state}; systemd={details}",
             )
         return observation
+
+    def apply_minecraft(
+        self,
+        *,
+        image: str,
+        minecraft_version: str,
+        paper_build: str,
+        memory: str,
+        eula: bool,
+    ) -> dict[str, object]:
+        if not eula:
+            raise HostActionError("minecraft_eula_required", "Minecraft EULA was not accepted")
+        if not _DIGEST_IMAGE.fullmatch(image):
+            raise HostActionError(
+                "minecraft_image_invalid", "Minecraft image must be pinned by SHA-256 digest"
+            )
+        if not _MINECRAFT_VERSION.fullmatch(minecraft_version):
+            raise HostActionError(
+                "minecraft_version_invalid", "Minecraft version must be an exact numeric version"
+            )
+        if not _PAPER_BUILD.fullmatch(paper_build):
+            raise HostActionError("paper_build_invalid", "Paper build must be a positive integer")
+        if not _MEMORY.fullmatch(memory):
+            raise HostActionError("minecraft_memory_invalid", "memory must use an M or G suffix")
+        if self._service_state(MINECRAFT_UNIT) == "active":
+            raise HostActionError(
+                "minecraft_apply_while_running", "Minecraft must be stopped before Quadlet apply"
+            )
+        data = self._data_directory(require_empty=False)
+        data.mkdir(mode=0o700, parents=True, exist_ok=True)
+        content = self._minecraft_quadlet(
+            image=image,
+            minecraft_version=minecraft_version,
+            paper_build=paper_build,
+            memory=memory,
+            data=data,
+        )
+        revision = hashlib.sha256(content.encode()).hexdigest()
+        self._install_quadlet(content, MINECRAFT_QUADLET, MINECRAFT_UNIT)
+        return {**self._minecraft_observation(), "revision": revision}
+
+    def start_minecraft(self) -> dict[str, object]:
+        observation = self._minecraft_observation()
+        if observation["minecraft"] != "ready":
+            self._checked(
+                ("systemctl", "start", MINECRAFT_UNIT),
+                timeout=900,
+                code="minecraft_start_failed",
+            )
+            observation = self._minecraft_observation()
+        if observation["minecraft"] != "ready":
+            raise HostActionError(
+                "minecraft_not_ready", f"Minecraft state is {observation['minecraft']}"
+            )
+        return observation
+
+    def observe_minecraft(self) -> dict[str, object]:
+        return self._minecraft_observation()
+
+    def stop_minecraft(self) -> dict[str, object]:
+        self._recover_paused_minecraft()
+        state = self._service_state(MINECRAFT_UNIT)
+        if state not in ("inactive", "not-found"):
+            self._checked(
+                ("systemctl", "stop", MINECRAFT_UNIT),
+                timeout=240,
+                code="minecraft_stop_failed",
+            )
+        observation = self._minecraft_observation()
+        if observation["minecraft"] != "stopped":
+            raise HostActionError(
+                "minecraft_stop_incomplete",
+                f"Minecraft state is {observation['minecraft']}; systemd={observation['systemd']}",
+            )
+        return observation
+
+    def snapshot_minecraft_data(
+        self,
+        command_id: str,
+        lease: Mapping[str, object],
+    ) -> dict[str, object]:
+        self._recover_paused_minecraft()
+        if self._minecraft_observation()["minecraft"] != "ready":
+            raise HostActionError(
+                "minecraft_not_ready", "Minecraft must be ready for a live snapshot"
+            )
+        self._rcon("save-off")
+        paused = False
+        try:
+            self._rcon("save-all", "flush")
+            self._checked(
+                ("podman", "pause", MINECRAFT_CONTAINER),
+                timeout=30,
+                code="minecraft_pause_failed",
+            )
+            paused = True
+            return self.snapshot_data(command_id, lease)
+        finally:
+            if paused:
+                self._checked(
+                    ("podman", "unpause", MINECRAFT_CONTAINER),
+                    timeout=30,
+                    code="minecraft_resume_failed",
+                )
+            self._rcon("save-on", code="minecraft_resume_failed")
 
     def init_data_repository(self, lease: Mapping[str, object]) -> dict[str, object]:
         with self._restic_environment(lease, required_permission="object-read-write") as env:
@@ -323,8 +447,12 @@ class HostRuntime:
         for path in sorted(data.rglob("*")):
             if path == data / RESTORE_MARKER:
                 continue
-            if path.is_symlink() or not path.is_file():
+            if path.is_symlink():
                 raise HostActionError("unsafe_data_path", "Run data contains a non-file entry")
+            if path.is_dir():
+                continue
+            if not path.is_file():
+                raise HostActionError("unsafe_data_path", "Run data contains a special file")
             relative = path.relative_to(data).as_posix()
             digest.update(relative.encode() + b"\0")
             digest.update(path.read_bytes())
@@ -374,6 +502,77 @@ class HostRuntime:
     def _fixture_observation(self) -> dict[str, object]:
         details = self._service_details(FIXTURE_UNIT)
         return {"fixture": self._state_from_details(details), "systemd": details}
+
+    def _minecraft_observation(self) -> dict[str, object]:
+        systemd = self._service_details(MINECRAFT_UNIT)
+        service_state = self._state_from_details(systemd)
+        container = self._minecraft_container_state()
+        if (
+            service_state == "active"
+            and container["status"] == "running"
+            and container["health"] == "healthy"
+            and container["paused"] is False
+        ):
+            state = "ready"
+        elif service_state in ("inactive", "not-found") and container["status"] == "absent":
+            state = "stopped"
+        elif service_state == "failed" or container["health"] == "unhealthy":
+            state = "failed"
+        elif service_state == "active" or container["status"] in ("created", "running"):
+            state = "starting"
+        else:
+            state = "unknown"
+        return {"minecraft": state, "systemd": systemd, "container": container}
+
+    def _minecraft_container_state(self) -> dict[str, object]:
+        result = self._runner.run(
+            (
+                "podman",
+                "inspect",
+                "--format",
+                "{{json .State}}",
+                MINECRAFT_CONTAINER,
+            ),
+            timeout=15,
+        )
+        if result.returncode != 0:
+            return {"status": "absent", "health": "absent", "paused": False}
+        try:
+            value = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            raise HostActionError(
+                "minecraft_observation_invalid", "Podman returned invalid container state"
+            ) from error
+        if not isinstance(value, dict):
+            raise HostActionError(
+                "minecraft_observation_invalid", "Podman returned invalid container state"
+            )
+        health_value = value.get("Healthcheck")
+        if not isinstance(health_value, dict):
+            health_value = value.get("Health")
+        health = health_value.get("Status") if isinstance(health_value, dict) else None
+        return {
+            "status": str(value.get("Status", "unknown")),
+            "health": str(health or "unknown"),
+            "paused": value.get("Paused") is True,
+        }
+
+    def _recover_paused_minecraft(self) -> None:
+        state = self._minecraft_container_state()
+        if state["paused"] is True:
+            self._checked(
+                ("podman", "unpause", MINECRAFT_CONTAINER),
+                timeout=30,
+                code="minecraft_resume_failed",
+            )
+            self._rcon("save-on", code="minecraft_resume_failed")
+
+    def _rcon(self, *command: str, code: str = "minecraft_quiesce_failed") -> None:
+        self._checked(
+            ("podman", "exec", MINECRAFT_CONTAINER, "rcon-cli", *command),
+            timeout=30,
+            code=code,
+        )
 
     def _version(self, arguments: Sequence[str]) -> str:
         try:
@@ -502,6 +701,47 @@ class HostRuntime:
             "Restart=on-failure\n"
             "TimeoutStartSec=180\n"
             "TimeoutStopSec=120\n"
+        )
+
+    @staticmethod
+    def _minecraft_quadlet(
+        *,
+        image: str,
+        minecraft_version: str,
+        paper_build: str,
+        memory: str,
+        data: Path,
+    ) -> str:
+        return (
+            "[Unit]\n"
+            "Description=mc-control-plane Paper Minecraft server\n"
+            "After=network-online.target\n"
+            "Wants=network-online.target\n\n"
+            "[Container]\n"
+            f"Image={image}\n"
+            f"ContainerName={MINECRAFT_CONTAINER}\n"
+            "Pull=missing\n"
+            f"Volume={data}:/data\n"
+            "PublishPort=25565:25565/tcp\n"
+            "Environment=EULA=TRUE\n"
+            "Environment=TYPE=PAPER\n"
+            f"Environment=VERSION={minecraft_version}\n"
+            f"Environment=PAPER_BUILD={paper_build}\n"
+            f"Environment=MEMORY={memory}\n"
+            "Environment=ENABLE_RCON=TRUE\n"
+            "Environment=STOP_DURATION=120\n"
+            "StopTimeout=180\n"
+            "HealthCmd=mc-health\n"
+            "HealthInterval=10s\n"
+            "HealthTimeout=10s\n"
+            "HealthRetries=60\n"
+            "HealthStartPeriod=2m\n"
+            "Notify=healthy\n"
+            "NoNewPrivileges=true\n\n"
+            "[Service]\n"
+            "Restart=on-failure\n"
+            "TimeoutStartSec=900\n"
+            "TimeoutStopSec=240\n"
         )
 
 

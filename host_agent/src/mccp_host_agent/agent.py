@@ -191,6 +191,44 @@ class HostAgent:
             if payload or data_lease is not None:
                 raise ValueError("fixture command must not include payload or data lease")
             return actions[kind]()
+        if kind == "apply_minecraft":
+            required = {
+                "server_unit_id",
+                "image",
+                "minecraft_version",
+                "paper_build",
+                "memory",
+                "eula",
+            }
+            if set(payload) != required or data_lease is not None:
+                raise ValueError("apply Minecraft payload is invalid")
+            string_fields = (
+                "server_unit_id",
+                "image",
+                "minecraft_version",
+                "paper_build",
+                "memory",
+            )
+            if not all(isinstance(payload[field], str) for field in string_fields):
+                raise ValueError("apply Minecraft payload values are invalid")
+            if not isinstance(payload["eula"], bool):
+                raise ValueError("apply Minecraft EULA value is invalid")
+            return self._runtime.apply_minecraft(
+                image=cast(str, payload["image"]),
+                minecraft_version=cast(str, payload["minecraft_version"]),
+                paper_build=cast(str, payload["paper_build"]),
+                memory=cast(str, payload["memory"]),
+                eula=cast(bool, payload["eula"]),
+            )
+        minecraft_actions = {
+            "start_minecraft": self._runtime.start_minecraft,
+            "observe_minecraft": self._runtime.observe_minecraft,
+            "stop_minecraft": self._runtime.stop_minecraft,
+        }
+        if kind in minecraft_actions:
+            if set(payload) != {"server_unit_id"} or data_lease is not None:
+                raise ValueError("Minecraft command payload is invalid")
+            return minecraft_actions[kind]()
         if kind == "write_data_fixture":
             if set(payload) != {"server_unit_id", "revision"} or data_lease is not None:
                 raise ValueError("write data fixture payload is invalid")
@@ -205,6 +243,8 @@ class HostAgent:
             return self._runtime.init_data_repository(data_lease)
         if kind == "snapshot_data" and set(payload) == {"server_unit_id"}:
             return self._runtime.snapshot_data(command_id, data_lease)
+        if kind == "snapshot_minecraft" and set(payload) == {"server_unit_id"}:
+            return self._runtime.snapshot_minecraft_data(command_id, data_lease)
         if kind == "restore_data" and set(payload) == {"server_unit_id", "snapshot_id"}:
             return self._runtime.restore_data(cast(str, payload["snapshot_id"]), data_lease)
         raise ValueError("unknown command kind or invalid payload")

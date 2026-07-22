@@ -6,7 +6,7 @@ from enum import StrEnum
 from typing import Any
 
 HOST_PROTOCOL_VERSION = 1
-HOST_AGENT_VERSION = "0.2.1"
+HOST_AGENT_VERSION = "0.3.0"
 HOST_AGENT_ARTIFACT_PATH = f"/artifacts/mccp-host-agent-{HOST_AGENT_VERSION}.whl"
 
 
@@ -39,6 +39,11 @@ class HostCommandKind(StrEnum):
     RESTORE_DATA = "restore_data"
     SNAPSHOT_DATA = "snapshot_data"
     OBSERVE_DATA = "observe_data"
+    APPLY_MINECRAFT = "apply_minecraft"
+    START_MINECRAFT = "start_minecraft"
+    OBSERVE_MINECRAFT = "observe_minecraft"
+    STOP_MINECRAFT = "stop_minecraft"
+    SNAPSHOT_MINECRAFT = "snapshot_minecraft"
 
     @property
     def requires_data_lease(self) -> bool:
@@ -46,6 +51,7 @@ class HostCommandKind(StrEnum):
             HostCommandKind.INIT_DATA_REPOSITORY,
             HostCommandKind.RESTORE_DATA,
             HostCommandKind.SNAPSHOT_DATA,
+            HostCommandKind.SNAPSHOT_MINECRAFT,
         }
 
 

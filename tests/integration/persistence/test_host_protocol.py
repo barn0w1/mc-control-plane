@@ -187,6 +187,36 @@ def test_migration_adds_host_protocol_schema(database: SQLiteDatabase) -> None:
         connection.close()
 
 
+def test_gate5_command_kinds_are_persistable(
+    database: SQLiteDatabase,
+    clock: MutableClock,
+) -> None:
+    store = HostProtocolStore(database)
+    _enroll(store, clock)
+
+    for index, kind in enumerate(
+        (
+            HostCommandKind.APPLY_MINECRAFT,
+            HostCommandKind.START_MINECRAFT,
+            HostCommandKind.OBSERVE_MINECRAFT,
+            HostCommandKind.STOP_MINECRAFT,
+            HostCommandKind.SNAPSHOT_MINECRAFT,
+        )
+    ):
+        store.queue_command(
+            command_id=f"gate5-{index}",
+            agent_id="agent-1",
+            operation_id="gate5-check",
+            step=kind.value,
+            kind=kind,
+            payload={"server_unit_id": "survival"},
+            deadline=clock.now() + timedelta(minutes=30),
+            now=clock.now(),
+        )
+
+    assert store.get_command("gate5-4").kind is HostCommandKind.SNAPSHOT_MINECRAFT  # type: ignore[union-attr]
+
+
 def test_poll_retries_a_transient_sqlite_writer_conflict(
     database: SQLiteDatabase,
     monkeypatch: pytest.MonkeyPatch,

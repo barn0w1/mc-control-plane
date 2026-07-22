@@ -242,4 +242,46 @@ MIGRATIONS = (
             """,
         ),
     ),
+    Migration(
+        version=6,
+        name="gate5_minecraft_commands",
+        statements=(
+            """
+            CREATE TABLE host_commands_v6 (
+                command_id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL REFERENCES host_agents(agent_id) ON DELETE RESTRICT,
+                run_id TEXT NOT NULL,
+                operation_id TEXT NOT NULL,
+                step TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN (
+                    'inspect_host', 'apply_fixture', 'start_fixture',
+                    'observe_fixture', 'stop_fixture',
+                    'init_data_repository', 'write_data_fixture',
+                    'restore_data', 'snapshot_data', 'observe_data',
+                    'apply_minecraft', 'start_minecraft', 'observe_minecraft',
+                    'stop_minecraft', 'snapshot_minecraft'
+                )),
+                payload_version INTEGER NOT NULL CHECK (payload_version = 1),
+                payload_json TEXT NOT NULL,
+                deadline TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (
+                    state IN ('pending', 'delivered', 'succeeded', 'failed')
+                ),
+                delivery_count INTEGER NOT NULL DEFAULT 0 CHECK (delivery_count >= 0),
+                result_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
+            """
+            INSERT INTO host_commands_v6 SELECT * FROM host_commands
+            """,
+            "DROP TABLE host_commands",
+            "ALTER TABLE host_commands_v6 RENAME TO host_commands",
+            """
+            CREATE INDEX ix_host_commands_delivery
+            ON host_commands(agent_id, state, created_at)
+            """,
+        ),
+    ),
 )

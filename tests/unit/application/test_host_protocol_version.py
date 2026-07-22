@@ -7,5 +7,5 @@ from mc_control_plane.application.host_protocol import (
 
 
 def test_control_plane_artifact_identity_matches_agent_package() -> None:
-    assert HOST_AGENT_VERSION == agent_version == "0.2.1"
-    assert HOST_AGENT_ARTIFACT_PATH == "/artifacts/mccp-host-agent-0.2.1.whl"
+    assert HOST_AGENT_VERSION == agent_version == "0.3.0"
+    assert HOST_AGENT_ARTIFACT_PATH == "/artifacts/mccp-host-agent-0.3.0.whl"

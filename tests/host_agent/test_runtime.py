@@ -6,6 +6,7 @@ import pytest
 from mccp_host_agent.runtime import CompletedCommand, HostActionError, HostRuntime
 
 IMAGE = "docker.io/library/alpine@sha256:" + "a" * 64
+MINECRAFT_IMAGE = "docker.io/itzg/minecraft-server@sha256:" + "b" * 64
 
 
 class FakeRunner:
@@ -13,6 +14,10 @@ class FakeRunner:
         self.calls: list[tuple[str, ...]] = []
         self.fixture_state = "inactive"
         self.stop_state = "inactive"
+        self.minecraft_state = "inactive"
+        self.minecraft_container_status = "absent"
+        self.minecraft_health = "absent"
+        self.minecraft_paused = False
         self.repository_exists = False
         self.backup_returncode = 0
         self.restic_environments: list[Mapping[str, str]] = []
@@ -59,7 +64,12 @@ class FakeRunner:
             return CompletedCommand(0, "", "")
         if values[:3] == ("systemctl", "show", "--property=LoadState"):
             unit = values[-1]
-            state = "active" if unit == "mccp-host-agent.service" else self.fixture_state
+            if unit == "mccp-host-agent.service":
+                state = "active"
+            elif unit == "mccp-minecraft.service":
+                state = self.minecraft_state
+            else:
+                state = self.fixture_state
             result = "exit-code" if state == "failed" else "success"
             status = "137" if state == "failed" else "0"
             return CompletedCommand(
@@ -71,9 +81,38 @@ class FakeRunner:
                 "",
             )
         if values[:2] == ("systemctl", "start"):
-            self.fixture_state = "active"
+            if values[-1] == "mccp-minecraft.service":
+                self.minecraft_state = "active"
+                self.minecraft_container_status = "running"
+                self.minecraft_health = "healthy"
+            else:
+                self.fixture_state = "active"
         if values[:2] == ("systemctl", "stop"):
-            self.fixture_state = self.stop_state
+            if values[-1] == "mccp-minecraft.service":
+                self.minecraft_state = "inactive"
+                self.minecraft_container_status = "absent"
+                self.minecraft_health = "absent"
+                self.minecraft_paused = False
+            else:
+                self.fixture_state = self.stop_state
+        if values[:2] == ("podman", "inspect"):
+            if self.minecraft_container_status == "absent":
+                return CompletedCommand(1, "", "no such container")
+            return CompletedCommand(
+                0,
+                json.dumps(
+                    {
+                        "Status": self.minecraft_container_status,
+                        "Paused": self.minecraft_paused,
+                        "Healthcheck": {"Status": self.minecraft_health},
+                    }
+                ),
+                "",
+            )
+        if values[:2] == ("podman", "pause"):
+            self.minecraft_paused = True
+        if values[:2] == ("podman", "unpause"):
+            self.minecraft_paused = False
         if values[-1:] == ("--version",):
             return CompletedCommand(0, f"{values[0]} version-test\n", "")
         if values == ("restic", "version"):
@@ -131,6 +170,111 @@ def test_fixture_stop_reports_failed_systemd_details(tmp_path: Path) -> None:
         runtime.stop_fixture()
 
     assert captured.value.code == "fixture_stop_incomplete"
+
+
+def test_minecraft_quadlet_is_pinned_and_health_gated(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    quadlets = tmp_path / "quadlets"
+    runtime = HostRuntime(
+        IMAGE,
+        runner=runner,
+        quadlet_directory=quadlets,
+        generator=Path("/generator"),
+        run_id="run-1",
+        data_root=tmp_path / "data",
+    )
+
+    result = runtime.apply_minecraft(
+        image=MINECRAFT_IMAGE,
+        minecraft_version="1.21.8",
+        paper_build="42",
+        memory="512M",
+        eula=True,
+    )
+
+    assert result["minecraft"] == "stopped"
+    assert len(result["revision"]) == 64
+    installed = (quadlets / "mccp-minecraft.container").read_text()
+    assert f"Image={MINECRAFT_IMAGE}" in installed
+    assert "Environment=TYPE=PAPER" in installed
+    assert "Environment=VERSION=1.21.8" in installed
+    assert "Environment=PAPER_BUILD=42" in installed
+    assert "Environment=MEMORY=512M" in installed
+    assert "Environment=EULA=TRUE" in installed
+    assert "PublishPort=25565:25565/tcp" in installed
+    assert "HealthCmd=mc-health" in installed
+    assert "Notify=healthy" in installed
+    assert "StopTimeout=180" in installed
+    assert "TimeoutStopSec=240" in installed
+    assert "latest" not in installed
+    assert (
+        "systemd-analyze",
+        "--generators=true",
+        "verify",
+        "mccp-minecraft.service",
+    ) in runner.calls
+
+
+def test_minecraft_lifecycle_and_live_snapshot_are_consistent(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    runner.repository_exists = True
+    runtime = HostRuntime(
+        IMAGE,
+        runner=runner,
+        quadlet_directory=tmp_path / "quadlets",
+        generator=Path("/generator"),
+        run_id="run-1",
+        data_root=tmp_path / "data",
+    )
+    runtime.apply_minecraft(
+        image=MINECRAFT_IMAGE,
+        minecraft_version="1.21.8",
+        paper_build="42",
+        memory="512M",
+        eula=True,
+    )
+    (runtime._data_directory(require_empty=False) / "world.dat").write_bytes(b"world")
+
+    assert runtime.start_minecraft()["minecraft"] == "ready"
+    assert runtime.observe_minecraft()["minecraft"] == "ready"
+    snapshot = runtime.snapshot_minecraft_data("command-1", _lease("object-read-write"))
+    assert snapshot["snapshot_id"] == "a" * 64
+    assert runtime.observe_minecraft()["minecraft"] == "ready"
+    assert runtime.stop_minecraft()["minecraft"] == "stopped"
+    assert runtime.stop_minecraft()["minecraft"] == "stopped"
+
+    save_off = ("podman", "exec", "mccp-minecraft", "rcon-cli", "save-off")
+    flush = ("podman", "exec", "mccp-minecraft", "rcon-cli", "save-all", "flush")
+    pause = ("podman", "pause", "mccp-minecraft")
+    unpause = ("podman", "unpause", "mccp-minecraft")
+    save_on = ("podman", "exec", "mccp-minecraft", "rcon-cli", "save-on")
+    backup_index = next(
+        index
+        for index, call in enumerate(runner.calls)
+        if call[:3] == ("restic", "--insecure-no-password", "backup")
+    )
+    assert runner.calls.index(save_off) < runner.calls.index(flush)
+    assert runner.calls.index(flush) < runner.calls.index(pause) < backup_index
+    assert backup_index < runner.calls.index(unpause) < runner.calls.index(save_on)
+
+
+def test_live_snapshot_recovers_a_previously_paused_minecraft(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    runner.repository_exists = True
+    runner.minecraft_state = "active"
+    runner.minecraft_container_status = "running"
+    runner.minecraft_health = "healthy"
+    runner.minecraft_paused = True
+    runtime = HostRuntime(IMAGE, runner=runner, run_id="run-1", data_root=tmp_path)
+    runtime._data_directory(require_empty=False).mkdir(parents=True, exist_ok=True)
+    (runtime._data_directory(require_empty=False) / "world.dat").write_bytes(b"world")
+
+    runtime.snapshot_minecraft_data("command-1", _lease("object-read-write"))
+
+    first_unpause = runner.calls.index(("podman", "unpause", "mccp-minecraft"))
+    first_save_on = runner.calls.index(("podman", "exec", "mccp-minecraft", "rcon-cli", "save-on"))
+    next_save_off = runner.calls.index(("podman", "exec", "mccp-minecraft", "rcon-cli", "save-off"))
+    assert first_unpause < first_save_on < next_save_off
 
 
 def _lease(permission: str) -> dict[str, object]:
