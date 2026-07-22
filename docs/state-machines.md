@@ -280,13 +280,14 @@ flowchart TD
 
 新しいsnapshotの作成に失敗した状態でLinodeを削除しません。限定回数のretryで解決しなければ、手動確認が可能な`blocked`へ移行します。
 
-## 9. 定期snapshot
+## 9. 実行中の手動snapshot
 
-最初のstart/stop vertical sliceで必須なのは正常停止時のsnapshotです。
-長時間稼働するRunに対する定期snapshotも同じ`Snapshotting` operationとして実装し、
-無人運用を始める前の必須条件とします。
+Gate 5では、任意のタイミングで呼べる安全な手動snapshot primitiveを実装します。scheduleを持つ
+定期snapshotは、間隔、失敗表示、retentionとの関係が未確定なため別の後続計画とします。
 
-定期snapshotでは実行中ファイルを無条件に読むのではなく、Minecraft/Host側でデータを静止させる必要があります。具体的なquiesce方式はhost実装時に決め、次の順序を守ります。
+実行中ファイルを無条件に読むのではなく、Host agentの一つの固定command内でRCON `save-off`、
+`save-all flush`、container pauseを行ってからresticを実行します。成功・失敗のどちらでもunpauseと
+`save-on`を試みます。
 
 ```mermaid
 flowchart TD
@@ -298,7 +299,8 @@ flowchart TD
     E --> F
 ```
 
-定期snapshotの失敗はMinecraftを停止する理由にはしません。失敗を記録して次回へ再試行し、最後の成功snapshotを復旧点として維持します。
+agentがpause中に中断した場合、at-least-onceで同じcommandを再実行する前にunpauseと`save-on`を
+行います。snapshot失敗時はMinecraftを停止せず、最後にcommit済みのsnapshotを復旧点として維持します。
 
 ## 10. 利用者向け表示状態
 

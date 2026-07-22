@@ -191,8 +191,9 @@ Snapshot作成に失敗した場合はLinodeを削除しません。商用サー
 - Linodeのhostnameは実行ごとに変わるため、Server Unit専用repository内ではresticのhost識別子を
   固定値にする。
 - 正常停止時のsnapshotを必須とする。
-- 長時間稼働するRunでは定期snapshotを作成する。実行間隔とMinecraftデータを静止させる具体的な方法はhost/workload実装時に決める。
-- 最初のstart/stop vertical sliceでは定期snapshotを後回しにできるが、無人運用を始める前には実装する。
+- 実行中の手動snapshotはRCON flushとcontainer pauseで静止させ、成否にかかわらずresumeする。
+- 定期snapshotは実行間隔、失敗表示、retentionとの関係を決めてから同じ手動snapshot primitiveへ
+  接続する。Gate 5の完成条件には含めない。
 - retentionと`forget`/`prune`は停止処理から分離したControl Planeのmaintenance operationとする。
 - 以前のsnapshotを一定期間残し、一つの新規snapshotだけに依存しない。具体的な保持数・期間は設定スキーマ設計時に決める。
 
