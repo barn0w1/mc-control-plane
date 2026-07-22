@@ -17,10 +17,10 @@ flowchart TD
 
 ## 確定している方針
 
-- 長期保存の正本はCloudflare R2上のrestic snapshotとする。
+- 稼働中の最新データはroot diskにあり、確定済みの永続的な復旧点はR2上のrestic snapshotとする。
 - 実行用データにはLinodeのroot diskを使い、Block Storage Volumeは使わない。
 - Control Planeが自動作成・削除するAkamai CloudリソースはLinodeだけとする。
-- Paper、plugin、Minecraft設定の内容は管理しない。Server Unitに含まれる不透明なデータとして保存・復元する。
+- Paper、plugin、Minecraft設定の内容は管理しない。Server Unitに関連する不透明なpayloadとして保存・復元する。
 - 同じServer Unitを同時に複数のLinodeで起動しない。
 - CLIを最初の操作インターフェイスとし、Discord Botなどは後から同じapplication use caseへ接続する。
 - 商用サービス級の高可用性は目標にしない。定期snapshotと単純で回復可能な処理を優先する。
@@ -28,6 +28,7 @@ flowchart TD
 ## ドキュメント
 
 - [Architecture](docs/architecture.md)
+- [Project structure](docs/project-structure.md)
 - [State machines](docs/state-machines.md)
 - [ADR-0001: resticをバックアップエンジンに採用する](docs/decisions/0001-use-restic.md)
 - [ADR-0002: Block Storage Volumeを使用しない](docs/decisions/0002-no-block-storage-volume.md)

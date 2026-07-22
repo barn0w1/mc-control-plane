@@ -4,60 +4,120 @@
 
 このシステムの目的は、Minecraftを遊ぶ人がインフラストラクチャやterminal操作へ時間を取られず、サーバーを安全かつ簡単に起動・停止できるようにすることです。
 
-このシステムはMinecraft設定管理ツールではありません。Minecraftサーバーディレクトリ全体を`ServerUnit`という不透明なデータ単位として扱い、それを一時的な実行環境へ展開・回収します。
+このシステムはMinecraft設定管理ツールではありません。
+`ServerUnit`はMinecraftサーバーの論理的な識別単位であり、world、設定、pluginなどの
+ファイル群はその不透明なpayloadとして一時的な実行環境へ展開・回収します。
 
-## 2. システム境界
+## 2. 実行時のシステム境界
 
-| レイヤー | 管理するもの | 管理しないもの |
+| 境界 | 管理するもの | 管理しないもの |
 | --- | --- | --- |
 | Interface | CLI、将来のDiscord Bot | UI固有のビジネスロジック |
-| Control Plane | desired state、Run、排他、処理履歴 | Minecraft設定の意味 |
-| Akamai Cloud | Linodeの作成・観測・削除 | Firewallなど事前作成するリソース、Volume |
-| Host | cloud-init、Podman、必要な実行ツール | 汎用的な構成管理システム |
-| Workload | containerの起動・停止・readiness | Paper/pluginの設定編集 |
-| Persistence | resticによるsnapshot、restore、retention | 独自の重複排除・暗号化実装 |
+| Control Plane | intent、Run、Operation、排他、観測履歴 | Minecraft payloadの内容 |
+| Akamai Cloud adapter | Linodeの作成・観測・削除 | Firewallなど手動作成するresource、Volume |
+| Execution Host | bootstrap、Podman、restic、workload制御 | 汎用的な構成管理 |
+| Minecraft Workload | container lifecycle、readiness、quiesce | Paper/plugin設定の編集 |
+| Snapshot storage | restic snapshot、restore、retention | 独自のbackup formatや暗号化実装 |
 
-## 3. コンポーネント
+Akamai Cloud、Cloudflare R2、手動作成したFirewallなどは外部システムです。
+一時的なLinode上のbootstrap処理とhost control componentはこのプロジェクトの管理対象ですが、
+OSやPodmanそのものを再実装しません。
+
+## 3. コード上の依存境界
 
 ```mermaid
 flowchart TD
-    Interface["Interface adapters<br/>CLI / Discord"] --> Application["Application use cases"]
-    Application --> Domain["Domain<br/>ServerUnit / Run / Lease"]
-    Application --> Infra["Infrastructure adapter<br/>Akamai Cloud"]
-    Application --> Snapshot["Snapshot adapter<br/>restic / R2"]
-    Infra --> Runtime["Ephemeral Linode<br/>cloud-init / Podman"]
-    Runtime <--> Snapshot
+    Inbound["Inbound adapters<br/>CLI / Discord"] --> Application["Application<br/>use cases / workflows"]
+    Application --> Domain["Domain<br/>entities / invariants"]
+    Application --> Ports["Outbound ports"]
+    Outbound["Outbound adapters<br/>DB / Akamai / Host / restic"] --> Ports
+    Bootstrap["Bootstrap<br/>config / wiring"] --> Inbound
+    Bootstrap --> Outbound
 ```
 
-依存関係は外側から内側へ向けます。Akamai Cloud SDK、restic subprocess、CLI frameworkの詳細をdomainへ持ち込みません。
+矢印はコードの依存方向です。ApplicationはAkamai Cloud SDKやrestic commandを直接参照せず、
+自分が定義するportだけを参照します。Outbound adapterがportを実装し、bootstrapが実体を組み立てます。
+Domainはframework、DB、network、subprocessへ依存しません。
 
-## 4. ドメイン概念
+## 4. データの正本
+
+全レイヤーに共通する一つの正本は存在しません。情報ごとに所有者を決めます。
+
+| 情報 | 正本・所有者 |
+| --- | --- |
+| desired state、Run、Operation、関連ID | Control Plane database |
+| Linodeの実在とprovider status | Akamai Cloud API |
+| HostとMinecraftの現在状態 | Hostからの観測結果 |
+| 稼働中の最新Minecraft payload | active Runのroot disk |
+| 確定済みの永続的な復旧点 | R2上のrestic snapshot |
+| 利用者向けの総合状態 | 上記から導出するprojection。正本ではない |
+
+したがって、R2を「常に最新のデータ」とはみなしません。Runの実行中はroot diskが先行し、
+snapshotがcommitされた時点で、そのsnapshotが新しい永続的な復旧点になります。
+
+## 5. ドメイン概念
 
 ### ServerUnit
 
-独立して起動・停止・復元できるMinecraftサーバーの論理単位です。
-world、Paper設定、plugin、pluginデータなどをまとめて含みます。
-Control Planeは内部ファイルの意味を解釈しません。
+独立して起動・停止・復元できるMinecraftサーバーの論理的なidentityです。
+`server_unit_id`、表示名、desired state、使用する`RuntimeSpec`などを持ちます。
+world、Paper設定、plugin、pluginデータはServer Unitに関連するpayloadですが、
+Control Planeのdomain modelは個々のファイルの意味を解釈しません。
+
+### RuntimeSpec
+
+Server Unitを実行するための不変なvalue objectです。region、Linode type、OS image、
+container image、手動作成済みresourceの参照など、Control Planeが必要とする実行条件を表します。
+Minecraft内部設定は含めません。Runの開始時にeffective specを記録し、実行途中の設定変更が
+既存Runへ暗黙に影響しないようにします。
 
 ### Run
 
-一つの`ServerUnit`を一つのLinodeで実行する試行です。再起動や再試行を含む処理の追跡単位で、固有の`run_id`を持ちます。
+一つのServer Unitを一つのLinodeで実行する試行です。固有の`run_id`、開始時の
+`RuntimeSpec`、復元元snapshot ID、開始・終了時刻を持ちます。
+途中のstepやretry状態はRunへ詰め込まず、`Operation`で追跡します。
+
+### RuntimeInstance
+
+Runのために確保したprovider resourceを表します。provider resource ID、region、作成時tag、
+最後に観測したraw provider statusと観測時刻を保持します。
+これはLinode SDK objectそのものではなく、domain/applicationが必要とする最小限の記録です。
 
 ### Snapshot
 
-resticが作成した復元可能な時点です。Control Planeはrestic snapshot ID、対象Server Unit、作成元Run、作成日時、検証状態を記録します。
-
-### Lease
-
-一つのServer Unitにactive Runが最大一つであることを保証します。
-MVPでは単一Control Planeとtransactional database constraintで実現し、
-分散consensusは導入しません。
+resticが作成し、commitまで確認できた復元可能な時点です。restic snapshot ID、対象Server Unit、
+作成元Run、種別、作成日時、検証状態を記録します。作成途中や失敗した試行はSnapshotではなく、
+`Operation`として記録します。
 
 ### Operation
 
-start、stop、snapshotなどの長時間処理を記録します。外部APIやsubprocessの途中でControl Planeが再起動しても、最後に確定したstepから処理を再開するために使います。
+start、stop、snapshot、maintenanceなどの長時間workflowです。操作種別、現在のstep、
+retry時刻、状態、最後のerrorを永続化します。Control Planeが再起動しても、観測し直して
+最後に確定したstepから進められる単位です。
 
-## 5. 状態モデル
+### Active Run invariant
+
+一つのServer Unitにactive Runが最大一つであることは、独立した`Lease` entityではなく、
+transactional database constraintとして表現します。単一Control PlaneではTTL、renewal、
+期限切れを伴うLeaseを導入しません。将来複数workerが必要になった場合だけ再検討します。
+
+## 6. 不変条件とresource所有権
+
+- 一つのServer Unitにactive Runは最大一つとする。ここでactiveとは表示上の`running`ではなく、
+  `ended_at`が未設定で、作成・起動・停止途中も含むRunを指す。
+- 一つのServer Unitに対する未完了の変更系Operationは同時に一つだけとする。
+- Runには同時に最大一つの未削除Runtime Instanceだけを関連付ける。
+- 作成するLinodeへsystem ID、Server Unit ID、Run IDを識別できるtagを付ける。
+- 削除前にDB上のresource IDと所有tagを照合し、このシステムが所有しないLinodeを削除しない。
+- createのtimeout後やControl Plane再起動後は、tagで既存Linodeを検索してから再作成する。
+- 同じServer Unitに未知の既存Linodeが見つかった場合は、新規作成せず`blocked`にする。
+- stop後のsnapshotがcommitされるまで、そのRunのLinodeを意図的に削除しない。
+- snapshot、restore、forget/pruneは同じrestic repositoryに対して競合実行しない。
+
+これらは低確率障害向けの高可用性機能ではなく、通常の再実行や操作競合でデータを分裂させないための
+最低限の安全条件です。
+
+## 7. 状態モデル
 
 全体を一つの`status`へ押し込みません。次の値を独立して保存します。
 
@@ -74,17 +134,19 @@ start、stop、snapshotなどの長時間処理を記録します。外部APIや
 利用者向けの`starting`や`running`は、これらの状態から導出する表示値です。
 詳細は[State machines](state-machines.md)を参照してください。
 
-## 6. データフロー
+## 8. データフロー
 
 ### Start
 
 1. Server Unitのactive Runがないことをtransaction内で確認する。
-2. `run_id`を発行し、active Runを記録する。
-3. `run_id`と`server_unit_id`をタグに含めてLinodeを作成する。
-4. Linode APIの状態とHostの準備完了をそれぞれ待つ。
-5. 指定されたrestic snapshot IDをroot diskへ復元する。初回は空のServer Unitを用意する。
-6. `itzg/minecraft-server` containerを起動し、readinessを確認する。
-7. Runをactiveとして公開する。
+2. `run_id`を発行し、effective `RuntimeSpec`と復元元snapshot IDを記録する。
+3. 同じServer Unitを示す既存Linodeがないか、所有tagで確認する。
+4. `run_id`と`server_unit_id`をtagに含めてLinodeを作成する。
+5. provider resource IDを`RuntimeInstance`として記録する。
+6. Linode APIの状態とHostの準備完了をそれぞれ待つ。
+7. 指定されたrestic snapshot IDをroot diskへ復元する。初回は空のpayloadを用意する。
+8. `itzg/minecraft-server` containerを起動し、readinessを確認する。
+9. Runをactiveとして公開する。
 
 ### Stop
 
@@ -97,7 +159,7 @@ start、stop、snapshotなどの長時間処理を記録します。外部APIや
 
 Snapshot作成に失敗した場合はLinodeを削除しません。商用サービス級の自動復旧は行わず、限定回数の再試行後に`blocked`として人間が確認できる状態へ移します。
 
-## 7. Snapshot方針
+## 9. Snapshot方針
 
 - バックアップエンジンはresticとする。
 - R2 bucket内ではServer Unitごとにrepositoryまたはprefixを分離する。
@@ -109,7 +171,7 @@ Snapshot作成に失敗した場合はLinodeを削除しません。商用サー
 - retentionと`forget`/`prune`は停止処理から分離したControl Planeのmaintenance operationとする。
 - 以前のsnapshotを一定期間残し、一つの新規snapshotだけに依存しない。具体的な保持数・期間は設定スキーマ設計時に決める。
 
-## 8. Secret方針
+## 10. Secret方針
 
 - Akamai Cloud API tokenとR2親credentialはControl Planeだけが保持する。
 - LinodeにはServer Unitのprefixへ限定した短命なR2 credentialを渡す。
@@ -118,7 +180,7 @@ Snapshot作成に失敗した場合はLinodeを削除しません。商用サー
 
 Cloudflare R2は一つのbucket、操作、prefix、TTLへ制限したtemporary credentialを発行でき、resticは`AWS_SESSION_TOKEN`を利用できます。
 
-## 9. 非目標
+## 11. 非目標
 
 - Control Planeのactive-active構成
 - 複数regionへの自動failover
@@ -129,18 +191,13 @@ Cloudflare R2は一つのbucket、操作、prefix、TTLへ制限したtemporary 
 - バックアップアルゴリズムの自作
 - restic以外のエンジンとの比較基盤
 
-## 10. 実装順序
+## 12. 実装方針
 
-1. domain modelと状態遷移
-2. database schemaとtransactional lease
-3. fake infrastructure/snapshot adapterによるuse case test
-4. CLI
-5. Akamai Cloud adapter
-6. cloud-initとhost protocol
-7. restic/R2 adapter
-8. startからstopまでのend-to-end test
-9. 定期snapshotとmaintenance
-10. Discord adapter
+Infrastructure adapterから単独で作り始めません。先にdomain、application workflow、portを定義し、
+fake adapterで不変条件と再実行をtestします。その後、最初の外部adapterとしてAkamai Cloudを
+狭いvertical sliceで接続します。
+
+project構成と具体的な実装順序は[Project structure](project-structure.md)を参照してください。
 
 ## 参考資料
 
