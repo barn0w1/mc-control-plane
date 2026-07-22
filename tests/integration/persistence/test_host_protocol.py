@@ -8,6 +8,7 @@ from mc_control_plane.adapters.outbound.persistence import (
     HostStoreUnavailable,
     SQLiteDatabase,
 )
+from mc_control_plane.adapters.outbound.persistence.schema import MIGRATIONS
 from mc_control_plane.application.host_protocol import (
     HostCommandKind,
     HostCommandState,
@@ -172,7 +173,9 @@ def test_migration_adds_host_protocol_schema(database: SQLiteDatabase) -> None:
             ).fetchall()
         }
         assert {"host_enrollments", "host_agents", "host_commands"}.issubset(tables)
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 4
+        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == len(
+            MIGRATIONS
+        )
         indexes = {
             row[0]
             for row in connection.execute(

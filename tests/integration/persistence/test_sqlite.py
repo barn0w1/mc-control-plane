@@ -1,4 +1,6 @@
+import sqlite3
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -23,6 +25,59 @@ def test_migration_is_idempotent_and_enables_required_pragmas(database: SQLiteDa
         assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == len(
             MIGRATIONS
         )
+    finally:
+        connection.close()
+
+
+def test_migration_clears_legacy_snapshot_verification_timestamp(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.db"
+    connection = sqlite3.connect(path, autocommit=True)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        for migration in MIGRATIONS[:4]:
+            for statement in migration.statements:
+                connection.execute(statement)
+            connection.execute(
+                "INSERT INTO schema_migrations(version, name) VALUES (?, ?)",
+                (migration.version, migration.name),
+            )
+        created_at = "2026-07-22T15:35:28+00:00"
+        connection.execute(
+            """
+            INSERT INTO server_units(
+                id, name, desired_state, runtime_spec_json, created_at, updated_at
+            ) VALUES ('survival', 'Survival', 'stopped', '{}', ?, ?)
+            """,
+            (created_at, created_at),
+        )
+        connection.execute(
+            """
+            INSERT INTO snapshots(id, server_unit_id, kind, created_at, verified_at)
+            VALUES ('snapshot-1', 'survival', 'manual', ?, ?)
+            """,
+            (created_at, created_at),
+        )
+    finally:
+        connection.close()
+
+    database = SQLiteDatabase(path)
+    database.migrate()
+
+    connection = database.connect()
+    try:
+        row = connection.execute(
+            "SELECT verified_at FROM snapshots WHERE id = 'snapshot-1'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] is None
     finally:
         connection.close()
 

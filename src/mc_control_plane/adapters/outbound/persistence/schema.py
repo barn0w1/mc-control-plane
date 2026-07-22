@@ -231,4 +231,15 @@ MIGRATIONS = (
             """,
         ),
     ),
+    Migration(
+        version=5,
+        name="separate_snapshot_creation_from_verification",
+        statements=(
+            """
+            UPDATE snapshots
+            SET verified_at = NULL
+            WHERE verified_at = created_at
+            """,
+        ),
+    ),
 )
