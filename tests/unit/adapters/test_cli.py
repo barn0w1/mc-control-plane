@@ -144,6 +144,52 @@ def test_gate4_cli_requires_explicit_three_host_confirmation(tmp_path: Path) -> 
     assert result == 2
 
 
+def _gate5_arguments(tmp_path: Path, key: Path) -> list[str]:
+    return [
+        "linode-gate5-check",
+        "--database",
+        str(tmp_path / "control.db"),
+        "--server-unit-id",
+        "survival",
+        "--host-bootstrap-key",
+        str(tmp_path / "bootstrap.key"),
+        "--control-plane-url",
+        "https://control.example.test",
+        "--agent-wheel",
+        str(tmp_path / "agent.whl"),
+        "--fixture-image",
+        "docker.io/library/alpine@sha256:" + "a" * 64,
+        "--minecraft-image",
+        "docker.io/itzg/minecraft-server@sha256:" + "b" * 64,
+        "--minecraft-version",
+        "1.21.8",
+        "--paper-build",
+        "42",
+        "--region",
+        "jp-tyo-3",
+        "--instance-type",
+        "g6-nanode-1",
+        "--firewall-id",
+        "12345",
+        "--ssh-public-key",
+        str(key),
+    ]
+
+
+def test_gate5_cli_requires_explicit_two_host_confirmation(tmp_path: Path) -> None:
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA test")
+
+    assert main([*_gate5_arguments(tmp_path, key), "--accept-minecraft-eula"]) == 2
+
+
+def test_gate5_cli_requires_explicit_eula_acceptance(tmp_path: Path) -> None:
+    key = tmp_path / "id_ed25519.pub"
+    key.write_text("ssh-ed25519 AAAA test")
+
+    assert main([*_gate5_arguments(tmp_path, key), "--confirm-billable-two-host-check"]) == 2
+
+
 def test_server_unit_create_start_and_status_cli(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
     database = tmp_path / "control.db"
 

@@ -57,6 +57,7 @@ from mc_control_plane.application.commands.start import RequestStart, StartServe
 from mc_control_plane.application.data_lease import DataLeaseUnavailable
 from mc_control_plane.application.gate3_cleanup import cleanup_gate3_runtime
 from mc_control_plane.application.gate4 import Gate4Error, run_gate4_data_lifecycle
+from mc_control_plane.application.gate5 import Gate5Error, run_gate5_minecraft_lifecycle
 from mc_control_plane.application.host_protocol import (
     HOST_AGENT_ARTIFACT_PATH,
     HOST_AGENT_VERSION,
@@ -214,6 +215,27 @@ def _parser() -> argparse.ArgumentParser:
     gate4.add_argument("--timeout-seconds", type=float, default=1800.0)
     gate4.add_argument("--poll-seconds", type=float, default=5.0)
     gate4.add_argument("--confirm-billable-three-host-check", action="store_true")
+
+    gate5 = commands.add_parser(
+        "linode-gate5-check",
+        help="run the two-Host Paper Minecraft lifecycle acceptance check",
+    )
+    _add_linode_arguments(gate5)
+    gate5.add_argument("--database", required=True, type=Path)
+    gate5.add_argument("--server-unit-id", required=True)
+    gate5.add_argument("--host-bootstrap-key", required=True, type=Path)
+    gate5.add_argument("--control-plane-url", required=True)
+    gate5.add_argument("--agent-wheel", required=True, type=Path)
+    gate5.add_argument("--fixture-image", required=True)
+    gate5.add_argument("--minecraft-image", required=True)
+    gate5.add_argument("--minecraft-version", required=True)
+    gate5.add_argument("--paper-build", required=True)
+    gate5.add_argument("--minecraft-memory", default="512M")
+    gate5.add_argument("--system-id", default="mc-control-plane")
+    gate5.add_argument("--timeout-seconds", type=float, default=2400.0)
+    gate5.add_argument("--poll-seconds", type=float, default=5.0)
+    gate5.add_argument("--accept-minecraft-eula", action="store_true")
+    gate5.add_argument("--confirm-billable-two-host-check", action="store_true")
     return parser
 
 
@@ -380,10 +402,78 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    if arguments.command == "linode-gate5-check" and not (
+        arguments.confirm_billable_two_host_check
+    ):
+        print(
+            "refusing billable check without --confirm-billable-two-host-check",
+            file=sys.stderr,
+        )
+        return 2
+    if arguments.command == "linode-gate5-check" and not arguments.accept_minecraft_eula:
+        print(
+            "refusing Minecraft start without --accept-minecraft-eula",
+            file=sys.stderr,
+        )
+        return 2
     try:
         if arguments.command == "reconciler-run":
             return _run_reconciler(arguments)
         provider = _linode_provider(arguments)
+        if arguments.command == "linode-gate5-check":
+            database = SQLiteDatabase(arguments.database)
+            database.migrate()
+            store = HostProtocolStore(database)
+            unit_of_work = cast(UnitOfWorkFactoryPort, SQLiteUnitOfWorkFactory(database))
+            clock = SystemClock()
+            host = DurableHostManager(
+                store,
+                DurableHostSettings(
+                    control_plane_url=arguments.control_plane_url,
+                    agent_wheel=arguments.agent_wheel,
+                    fixture_image=arguments.fixture_image,
+                ),
+                load_bootstrap_key(arguments.host_bootstrap_key),
+            )
+            workflow = StartWorkflow(
+                unit_of_work,
+                provider,
+                clock,
+                system_id=arguments.system_id,
+                host_bootstrap=host,
+                host_observations=host,
+            )
+            print(
+                "Starting billable Gate 5 check; two sequential Linodes will be created "
+                "and deleted only after a stopped Minecraft snapshot is committed."
+            )
+            gate5_result = run_gate5_minecraft_lifecycle(
+                unit_of_work,
+                store,
+                provider,
+                OperationReconciler(unit_of_work, workflow, clock),
+                clock,
+                UuidGenerator(),
+                server_unit_id=arguments.server_unit_id,
+                system_id=arguments.system_id,
+                minecraft_image=arguments.minecraft_image,
+                minecraft_version=arguments.minecraft_version,
+                paper_build=arguments.paper_build,
+                memory=arguments.minecraft_memory,
+                eula_accepted=arguments.accept_minecraft_eula,
+                timeout_seconds=arguments.timeout_seconds,
+                poll_seconds=arguments.poll_seconds,
+                progress=lambda message: print(f"Gate 5: {message}"),
+            )
+            print(
+                "Gate 5 check passed: "
+                f"manual-snapshot={gate5_result.manual_snapshot_id} "
+                f"stop-snapshot={gate5_result.stop_snapshot_id} "
+                f"restored-stop-snapshot={gate5_result.restored_stop_snapshot_id} "
+                "paper=ready live-snapshot=quiesced graceful-stop=passed "
+                "fresh-host-restore=passed restart=passed cleanup=confirmed"
+            )
+            return 0
         if arguments.command == "linode-gate4-check":
             database = SQLiteDatabase(arguments.database)
             database.migrate()
@@ -560,6 +650,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         LinodeGate1CheckError,
         LinodeGate2CheckError,
         Gate4Error,
+        Gate5Error,
         ControlPlaneError,
         OSError,
         ValueError,
