@@ -16,6 +16,7 @@ FIXTURE_UNIT = "mccp-gate2-fixture.service"
 FIXTURE_QUADLET = "mccp-gate2-fixture.container"
 AGENT_UNIT = "mccp-host-agent.service"
 RESTORE_MARKER = ".mccp-restored-snapshot"
+RESTIC = ("restic", "--insecure-no-password")
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,14 +187,16 @@ class HostRuntime:
 
     def init_data_repository(self, lease: Mapping[str, object]) -> dict[str, object]:
         with self._restic_environment(lease, required_permission="object-read-write") as env:
-            probe = self._run_restic(("restic", "cat", "config"), env, timeout=60)
+            probe = self._run_restic((*RESTIC, "cat", "config"), env, timeout=60)
             if probe.returncode == 10:
-                self._checked(
-                    ("restic", "init", "--repository-version", "2"),
-                    timeout=120,
-                    environment=env,
-                    code="repository_init_failed",
+                initialized = self._run_restic(
+                    (*RESTIC, "init", "--repository-version", "2"), env, timeout=120
                 )
+                if initialized.returncode != 0:
+                    raise HostActionError(
+                        "repository_init_failed",
+                        self._restic_error(initialized, "repository init failed"),
+                    )
                 state = "created"
             elif probe.returncode == 0:
                 state = "existing"
@@ -222,7 +225,7 @@ class HostRuntime:
         idempotency_tag = "mccp-command-" + hashlib.sha256(command_id.encode()).hexdigest()
         with self._restic_environment(lease, required_permission="object-read-write") as env:
             existing = self._run_restic(
-                ("restic", "snapshots", "--json", "--tag", idempotency_tag),
+                (*RESTIC, "snapshots", "--json", "--tag", idempotency_tag),
                 env,
                 timeout=120,
             )
@@ -236,7 +239,7 @@ class HostRuntime:
                 return {"snapshot_id": existing_id, "reused": True, **self.observe_data()}
             result = self._run_restic(
                 (
-                    "restic",
+                    *RESTIC,
                     "backup",
                     "--json",
                     "--host",
@@ -286,7 +289,7 @@ class HostRuntime:
             with self._restic_environment(lease, required_permission="object-read-only") as env:
                 result = self._run_restic(
                     (
-                        "restic",
+                        *RESTIC,
                         "--no-lock",
                         "restore",
                         f"{snapshot_id}:/",
@@ -438,6 +441,11 @@ class HostRuntime:
         timeout: float,
         cwd: Path | None = None,
     ) -> CompletedCommand:
+        if tuple(arguments[: len(RESTIC)]) != RESTIC:
+            raise HostActionError(
+                "restic_password_mode_missing",
+                "repository command must explicitly use passwordless mode",
+            )
         try:
             return self._runner.run(arguments, timeout=timeout, environment=environment, cwd=cwd)
         except (OSError, subprocess.SubprocessError) as error:
@@ -505,25 +513,24 @@ class _ResticEnvironment:
             "access_key_id",
             "secret_access_key",
             "session_token",
-            "restic_password",
             "permission",
             "expires_at",
         }
-        if set(lease) != required or lease.get("schema_version") != 1:
+        if set(lease) != required or lease.get("schema_version") != 2:
             raise HostActionError("data_lease_invalid", "data lease fields are invalid")
         values = {name: lease.get(name) for name in required - {"schema_version"}}
         if not all(isinstance(value, str) and value for value in values.values()):
             raise HostActionError("data_lease_invalid", "data lease values are invalid")
         if values["permission"] != required_permission:
             raise HostActionError("data_lease_permission", "data lease permission is insufficient")
-        self._temporary = tempfile.TemporaryDirectory(prefix="mccp-restic-")
-        password = Path(self._temporary.name) / "password"
-        password.write_text(str(values["restic_password"]) + "\n")
-        password.chmod(0o600)
+        ambient = {
+            name: value
+            for name, value in os.environ.items()
+            if not name.startswith("RESTIC_PASSWORD") and name != "RESTIC_KEY_HINT"
+        }
         self.environment = {
-            **os.environ,
+            **ambient,
             "RESTIC_REPOSITORY": str(values["repository"]),
-            "RESTIC_PASSWORD_FILE": str(password),
             "AWS_ACCESS_KEY_ID": str(values["access_key_id"]),
             "AWS_SECRET_ACCESS_KEY": str(values["secret_access_key"]),
             "AWS_SESSION_TOKEN": str(values["session_token"]),
@@ -541,4 +548,4 @@ class _ResticEnvironment:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        self._temporary.cleanup()
+        return None

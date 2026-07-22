@@ -1,8 +1,6 @@
 """Cloudflare R2 temporary credentials for per-Server-Unit restic repositories."""
 
-import base64
 import hashlib
-import hmac
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -100,14 +98,10 @@ class R2ResticLeaseBroker:
         store: HostProtocolStore,
         client: TemporaryCredentialClient,
         settings: R2ResticSettings,
-        root_secret: bytes,
     ) -> None:
-        if len(root_secret) < 32:
-            raise ValueError("restic root secret must contain at least 32 bytes")
         self._store = store
         self._client = client
         self._settings = settings
-        self._root_secret = root_secret
 
     def issue_for(self, command: HostCommand, now: datetime) -> ResticDataLease:
         if not command.kind.requires_data_lease:
@@ -131,13 +125,6 @@ class R2ResticLeaseBroker:
         access_key = _credential(raw, "accessKeyId")
         secret_key = _credential(raw, "secretAccessKey")
         session_token = _credential(raw, "sessionToken")
-        password = base64.urlsafe_b64encode(
-            hmac.new(
-                self._root_secret,
-                b"mccp-restic-password-v1\0" + server_unit_id.encode(),
-                hashlib.sha256,
-            ).digest()
-        ).decode()
         repository = (
             f"s3:https://{self._settings.account_id}.r2.cloudflarestorage.com/"
             f"{self._settings.bucket}/{prefix}"
@@ -147,7 +134,6 @@ class R2ResticLeaseBroker:
             access_key_id=access_key,
             secret_access_key=secret_key,
             session_token=session_token,
-            restic_password=password,
             permission=permission,
             expires_at=now + timedelta(seconds=self._settings.ttl_seconds),
         )
@@ -158,7 +144,7 @@ def repository_prefix(server_unit_id: str) -> str:
     return f"mc-control-plane/server-units/{identity}/repository"
 
 
-def load_root_secret(path: Path) -> bytes:
+def load_secret_file(path: Path) -> bytes:
     metadata = path.stat()
     if stat.S_IMODE(metadata.st_mode) & 0o077:
         raise ValueError(f"secret file must not be accessible by group or others: {path}")

@@ -47,7 +47,7 @@ from mc_control_plane.adapters.outbound.storage import (
     CloudflareTemporaryCredentialClient,
     R2ResticLeaseBroker,
     R2ResticSettings,
-    load_root_secret,
+    load_secret_file,
 )
 from mc_control_plane.application.commands.server_unit import (
     CreateServerUnit,
@@ -84,12 +84,6 @@ def _parser() -> argparse.ArgumentParser:
         help="create a root-only Host enrollment derivation key",
     )
     bootstrap_key.add_argument("path", type=Path)
-
-    data_key = commands.add_parser(
-        "data-root-key-create",
-        help="create a root-only key for per-Server-Unit restic password derivation",
-    )
-    data_key.add_argument("path", type=Path)
 
     unit_create = commands.add_parser("server-unit-create", help="register a Server Unit")
     unit_create.add_argument("--database", required=True, type=Path)
@@ -177,7 +171,6 @@ def _parser() -> argparse.ArgumentParser:
     host_api.add_argument("--r2-bucket")
     host_api.add_argument("--r2-parent-access-key-id")
     host_api.add_argument("--cloudflare-api-token-file", type=Path)
-    host_api.add_argument("--data-root-key", type=Path)
     host_api.add_argument("--r2-lease-ttl-seconds", type=int, default=900)
 
     gate2 = commands.add_parser(
@@ -272,16 +265,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         database.migrate()
         print(f"initialized {arguments.database}")
         return 0
-    if arguments.command in {"host-bootstrap-key-create", "data-root-key-create"}:
+    if arguments.command == "host-bootstrap-key-create":
         try:
             create_bootstrap_key(arguments.path)
         except (OSError, ValueError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
-        label = (
-            "Host bootstrap" if arguments.command == "host-bootstrap-key-create" else "data root"
-        )
-        print(f"created {label} key: {arguments.path}")
+        print(f"created Host bootstrap key: {arguments.path}")
         return 0
     if arguments.command in {"server-unit-create", "server-unit-start", "server-unit-status"}:
         try:
@@ -569,13 +559,12 @@ def _data_lease_broker(
         arguments.r2_bucket,
         arguments.r2_parent_access_key_id,
         arguments.cloudflare_api_token_file,
-        arguments.data_root_key,
     )
     if not any(value is not None for value in values):
         return None
     if not all(value is not None for value in values):
         raise ValueError("all R2 data lease options must be provided together")
-    token = load_root_secret(arguments.cloudflare_api_token_file).decode().strip()
+    token = load_secret_file(arguments.cloudflare_api_token_file).decode().strip()
     settings = R2ResticSettings(
         arguments.r2_account_id,
         arguments.r2_bucket,
@@ -583,12 +572,7 @@ def _data_lease_broker(
         arguments.r2_lease_ttl_seconds,
     )
     client = CloudflareTemporaryCredentialClient(settings.account_id, token)
-    return R2ResticLeaseBroker(
-        store,
-        client,
-        settings,
-        load_root_secret(arguments.data_root_key),
-    )
+    return R2ResticLeaseBroker(store, client, settings)
 
 
 def _run_reconciler(arguments: argparse.Namespace) -> int:

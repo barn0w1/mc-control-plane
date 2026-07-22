@@ -4,12 +4,12 @@ from mc_control_plane.adapters.outbound.storage.r2 import (
     CloudflareTemporaryCredentialClient,
     R2ResticLeaseBroker,
     R2ResticSettings,
-    load_root_secret,
+    load_secret_file,
 )
 
 __all__ = [
     "CloudflareTemporaryCredentialClient",
     "R2ResticLeaseBroker",
     "R2ResticSettings",
-    "load_root_secret",
+    "load_secret_file",
 ]

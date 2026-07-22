@@ -51,7 +51,6 @@ def test_r2_lease_is_scoped_and_secret_values_are_not_in_durable_command() -> No
         FakeStore(),
         credentials,
         R2ResticSettings("account", "bucket", "parent", 900),
-        b"k" * 32,
     )
     command = _command(HostCommandKind.SNAPSHOT_DATA)
 
@@ -62,7 +61,16 @@ def test_r2_lease_is_scoped_and_secret_values_are_not_in_durable_command() -> No
     assert str(credentials.request["prefix"]).startswith("mc-control-plane/server-units/")
     assert lease.repository.endswith(str(credentials.request["prefix"]))
     assert lease.access_key_id not in str(command.wire_value())
-    assert lease.restic_password not in str(command.wire_value())
+    assert set(lease.wire_value()) == {
+        "schema_version",
+        "repository",
+        "access_key_id",
+        "secret_access_key",
+        "session_token",
+        "permission",
+        "expires_at",
+    }
+    assert lease.wire_value()["schema_version"] == 2
 
 
 def test_restore_lease_is_read_only() -> None:
@@ -71,7 +79,6 @@ def test_restore_lease_is_read_only() -> None:
         FakeStore(),
         credentials,
         R2ResticSettings("account", "bucket", "parent", 900),
-        b"k" * 32,
     )
 
     broker.issue_for(_command(HostCommandKind.RESTORE_DATA), datetime(2026, 7, 22, 12, tzinfo=UTC))

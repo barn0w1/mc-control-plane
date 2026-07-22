@@ -102,7 +102,6 @@ class DataLeases:
             "temporary-access",
             "temporary-secret",
             "temporary-session",
-            "repository-password",
             "object-read-write",
             datetime(2026, 7, 22, 12, 15, tzinfo=UTC),
         )
@@ -121,3 +120,5 @@ def test_api_attaches_data_lease_without_mutating_durable_command() -> None:
     assert response.body["command"]["payload"] == {"server_unit_id": "survival"}
     assert "temporary-secret" not in str(response.body["command"])
     assert response.body["data_lease"]["secret_access_key"] == "temporary-secret"
+    assert response.body["data_lease"]["schema_version"] == 2
+    assert "restic_password" not in response.body["data_lease"]

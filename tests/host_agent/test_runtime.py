@@ -30,18 +30,18 @@ class FakeRunner:
         values = tuple(arguments)
         self.calls.append(values)
         self.cwds.append(cwd)
-        if values[:2] == ("restic", "cat"):
+        if values[:3] == ("restic", "--insecure-no-password", "cat"):
             self.restic_environments.append(dict(environment or {}))
             return CompletedCommand(0 if self.repository_exists else 10, "", "")
-        if values[:2] == ("restic", "init"):
+        if values[:3] == ("restic", "--insecure-no-password", "init"):
             self.repository_exists = True
             return CompletedCommand(0, "created\n", "")
-        if values[:2] == ("restic", "snapshots"):
+        if values[:3] == ("restic", "--insecure-no-password", "snapshots"):
             document = (
                 [] if self.existing_snapshot_id is None else [{"id": self.existing_snapshot_id}]
             )
             return CompletedCommand(0, json.dumps(document), "")
-        if values[:2] == ("restic", "backup"):
+        if values[:3] == ("restic", "--insecure-no-password", "backup"):
             self.restic_environments.append(dict(environment or {}))
             result = CompletedCommand(
                 self.backup_returncode,
@@ -135,18 +135,23 @@ def test_fixture_stop_reports_failed_systemd_details(tmp_path: Path) -> None:
 
 def _lease(permission: str) -> dict[str, object]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "repository": "s3:https://account.r2.cloudflarestorage.com/bucket/prefix",
         "access_key_id": "temporary-access",
         "secret_access_key": "temporary-secret",
         "session_token": "temporary-session",
-        "restic_password": "repository-password",
         "permission": permission,
         "expires_at": "2026-07-22T12:15:00+00:00",
     }
 
 
-def test_data_repository_snapshot_and_restore_use_fixed_run_directory(tmp_path: Path) -> None:
+def test_data_repository_snapshot_and_restore_use_fixed_run_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RESTIC_PASSWORD", "ambient-password")
+    monkeypatch.setenv("RESTIC_PASSWORD_FILE", "/ambient/password-file")
+    monkeypatch.setenv("RESTIC_PASSWORD_COMMAND", "ambient-command")
+    monkeypatch.setenv("RESTIC_KEY_HINT", "ambient-key")
     runner = FakeRunner()
     runtime = HostRuntime(IMAGE, runner=runner, run_id="run/../../../escape", data_root=tmp_path)
 
@@ -158,9 +163,21 @@ def test_data_repository_snapshot_and_restore_use_fixed_run_directory(tmp_path: 
     assert snapshotted["snapshot_id"] == "a" * 64
     repeated = runtime.snapshot_data("command-1", _lease("object-read-write"))
     assert repeated["reused"] is True
-    assert sum(call[:2] == ("restic", "backup") for call in runner.calls) == 1
+    assert (
+        sum(call[:3] == ("restic", "--insecure-no-password", "backup") for call in runner.calls)
+        == 1
+    )
     assert any(cwd is not None and cwd.is_relative_to(tmp_path) for cwd in runner.cwds)
     assert any("AWS_SESSION_TOKEN" in env for env in runner.restic_environments)
+    assert all(
+        not any(name.startswith("RESTIC_PASSWORD") for name in env) and "RESTIC_KEY_HINT" not in env
+        for env in runner.restic_environments
+    )
+    repository_commands = [
+        call for call in runner.calls if call[0] == "restic" and "version" not in call
+    ]
+    assert repository_commands
+    assert all(call[1] == "--insecure-no-password" for call in repository_commands)
     assert not any(path.name == "escape" for path in tmp_path.rglob("*"))
 
     fresh = HostRuntime(IMAGE, runner=runner, run_id="fresh-run", data_root=tmp_path)
