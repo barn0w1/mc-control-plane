@@ -28,6 +28,7 @@ flowchart TD
 - CLIを最初の操作インターフェイスとし、Discord Botなどは後から同じapplication use caseへ接続する。
 - Execution HostはDebian 13とし、container lifecycleをsystemd / Podman Quadletで管理する。
 - 通常のHost制御にはoutbound polling agentを使い、SSHは手動調査専用とする。
+- Execution HostはLinode Interfacesだけを使い、一時root diskのlocal disk encryptionを無効にする。
 - 商用サービス級の高可用性は目標にしない。定期snapshotと単純で回復可能な処理を優先する。
 
 ## ドキュメント
@@ -45,6 +46,7 @@ flowchart TD
 - [ADR-0006: 公式Linode SDKをCompute adapter内に隔離して使用する](docs/decisions/0006-use-official-linode-sdk.md)
 - [ADR-0007: Debian 13上のcontainer lifecycleにPodman Quadletを使用する](docs/decisions/0007-use-quadlet-on-debian-13.md)
 - [ADR-0008: 通常のHost制御にoutbound polling Host agentを使用する](docs/decisions/0008-use-outbound-host-agent.md)
+- [ADR-0009: 一時Linodeのlocal disk encryptionを無効にする](docs/decisions/0009-disable-local-disk-encryption.md)
 
 ## 現在の段階
 

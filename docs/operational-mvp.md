@@ -29,6 +29,7 @@ Gateは実装順であり、後段のdemoが動いても前段のacceptance crit
 - 所有tagによるLinode検索、作成、状態観測、安全な削除を行う公式SDK adapter
 - provider status mapping、timeout後の再発見、所有権検査の自動test
 - Debian 13/Metadata/Firewall preflight、cloud-init Metadata create入力
+- Linode Interfaces限定networking、local disk encryption無効化と作成後観測
 - 明示的な課金確認、所有権限定cleanupを持つGate 1 live acceptance harness
 
 start workflowはLinodeが`running`になり、`WAIT_HOST`へ進むところまで実装済みである。
