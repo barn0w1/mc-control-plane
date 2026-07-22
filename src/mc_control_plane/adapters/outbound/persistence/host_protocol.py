@@ -224,7 +224,9 @@ class HostProtocolStore:
                 raise HostAuthenticationError("invalid host credential")
             if row["agent_id"] != agent_id or row["run_id"] != run_id:
                 raise HostAuthenticationError("host credential identity does not match")
-            status = "ready" if row["protocol_version"] == HOST_PROTOCOL_VERSION else "incompatible"
+            status = (
+                "connected" if row["protocol_version"] == HOST_PROTOCOL_VERSION else "incompatible"
+            )
             connection.execute(
                 """
                 UPDATE host_agents

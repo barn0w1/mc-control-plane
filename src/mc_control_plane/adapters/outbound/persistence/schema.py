@@ -138,7 +138,7 @@ MIGRATIONS = (
                 protocol_version INTEGER NOT NULL,
                 agent_version TEXT NOT NULL,
                 status TEXT NOT NULL CHECK (
-                    status IN ('enrolled', 'ready', 'incompatible', 'revoked')
+                    status IN ('enrolled', 'connected', 'incompatible', 'revoked')
                 ),
                 boot_id TEXT,
                 capabilities_json TEXT,

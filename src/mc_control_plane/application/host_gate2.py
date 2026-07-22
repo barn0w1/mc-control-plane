@@ -83,11 +83,11 @@ def _wait_for_agent(
         agent = store.get_agent(agent_id)
         status = "absent" if agent is None else agent.status
         report(f"agent poll {attempt + 1}/{attempts}: status={status}")
-        if agent is not None and agent.status == "ready" and agent.observed_at is not None:
+        if agent is not None and agent.status == "connected" and agent.observed_at is not None:
             return agent
         if attempt + 1 < attempts:
             sleeper(poll_seconds)
-    raise HostGate2Error("Host agent did not become ready before timeout")
+    raise HostGate2Error("Host agent did not connect before timeout")
 
 
 def _wait_for_command(

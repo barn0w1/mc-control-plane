@@ -131,7 +131,7 @@ def test_command_is_redelivered_until_terminal_result_is_recorded(
     second = store.poll(token, _poll(), now=clock.now())
     assert first is not None and second is not None
     assert first.command_id == second.command_id == "command-1"
-    assert store.get_agent("agent-1").status == "ready"  # type: ignore[union-attr]
+    assert store.get_agent("agent-1").status == "connected"  # type: ignore[union-attr]
 
     result = {
         "command_id": "command-1",

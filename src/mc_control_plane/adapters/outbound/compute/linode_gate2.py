@@ -225,7 +225,11 @@ def _new_boot(
         agent = store.get_agent(agent_id)
         boot = "absent" if agent is None or agent.boot_id is None else agent.boot_id
         report(f"reboot poll {attempt + 1}/{attempts}: boot={boot}")
-        if agent is not None and agent.status == "ready" and agent.boot_id not in (None, previous):
+        if (
+            agent is not None
+            and agent.status == "connected"
+            and agent.boot_id not in (None, previous)
+        ):
             states = agent.service_states or {}
             if states.get("agent") != "active":
                 raise LinodeGate2CheckError("agent service was not active after reboot")
