@@ -93,7 +93,8 @@ Gate 2を通過するまで、Minecraft固有のreadinessやserver commandをHos
 
 Control Planeを常駐processとして動かし、InfraとHostの状態機械を永続workflowで結ぶ。
 
-Status: **実装と自動testは完了、実accountのlive acceptance待ち**。実行手順は
+Status: **Complete**（2026-07-22）。project ownerが、同一Operation/Runのprocess再開、Host ready、
+重複Linodeなし、明示cleanup後のprovider/DB双方のabsenceを実accountで確認した。実行手順は
 [Gate 3 acceptance](gates/03-durable-orchestration.md)に固定する。
 
 - due Operationを一stepずつ処理する単一reconcilerを実装する。
@@ -106,6 +107,9 @@ Status: **実装と自動testは完了、実accountのlive acceptance待ち**。
 ### Gate 4: Data lifecycle
 
 Minecraftを起動する前に、R2上のrestic repositoryとroot diskのdata lifecycleを完成させる。
+
+Status: **実装と自動testは完了、実accountのlive acceptance待ち**。実行手順は
+[Gate 4 acceptance](gates/04-data-lifecycle.md)に固定する。
 
 - Server Unitごとのrepository/prefixを初期化し、記録したsnapshot IDを明示してrestoreできる。
 - restore先をRun専用directoryに限定し、path traversalや別Server Unitへの書き込みを拒否する。

@@ -28,7 +28,7 @@ restic、Kopia、Duplicacy、Borg、単純なarchive uploadを検討しました
 - 原則としてServer Unitごとにrestic repositoryまたはR2 prefixを分離する。
 - Control Planeはrestic snapshot IDを明示的に記録する。
 - restore時に`latest`を暗黙選択しない。
-- 安定したServer Unit IDをrestic host識別子に使う。
+- Server Unitごとにrepositoryを分離し、backupのhost識別子は固定値にしてRun間のparent選択を安定させる。
 - snapshot作成の成功条件はresticの終了コード0とJSON summary内のsnapshot ID取得とする。
 - `forget`と`prune`はstop workflowから分離したmaintenance operationで行う。
 - repository passwordとR2 credentialは別のsecretとして管理する。

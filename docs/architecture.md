@@ -185,7 +185,8 @@ Snapshot作成に失敗した場合はLinodeを削除しません。商用サー
 - バックアップエンジンはresticとする。
 - R2 bucket内ではServer Unitごとにrepositoryまたはprefixを分離する。
 - restore対象は`latest`ではなく、Control Planeが記録したsnapshot IDで指定する。
-- Linodeのhostnameは実行ごとに変わるため、resticのhost識別子には安定したServer Unit IDを使う。
+- Linodeのhostnameは実行ごとに変わるため、Server Unit専用repository内ではresticのhost識別子を
+  固定値にする。
 - 正常停止時のsnapshotを必須とする。
 - 長時間稼働するRunでは定期snapshotを作成する。実行間隔とMinecraftデータを静止させる具体的な方法はhost/workload実装時に決める。
 - 最初のstart/stop vertical sliceでは定期snapshotを後回しにできるが、無人運用を始める前には実装する。

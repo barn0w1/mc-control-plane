@@ -144,9 +144,9 @@ uv run mc-control-plane linode-gate3-cleanup \
 
 ## Gate判定
 
-上記のprocess再開後にHost readyへ到達し、重複Linodeがなく、明示的cleanupで外部・DB双方のactive
-resourceがなくなったことをproject ownerが確認した時点でGate 3全体をCompleteとする。それまでは
-実装と自動testだけがCompleteであり、Gate 4の設計準備はできても実環境完了とは扱わない。
+**Complete（2026-07-22）**。project ownerが同一Operation/Runのprocess中断・再開、Host ready、
+重複Linodeなし、明示cleanupで外部・DB双方のactive resourceがなくなることを確認した。次は
+[Gate 4 acceptance](04-data-lifecycle.md)でMinecraft導入前のdata lifecycleを検証する。
 
 ## 公式資料
 
