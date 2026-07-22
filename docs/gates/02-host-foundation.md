@@ -71,11 +71,36 @@ uv run mc-control-plane host-api-serve \
   --port 8443 \
   --tls-certificate /path/to/fullchain.pem \
   --tls-private-key /path/to/privkey.pem \
-  --agent-wheel dist/host-agent/mccp_host_agent-0.1.0-py3-none-any.whl
+  --agent-wheel dist/host-agent/mccp_host_agent-0.1.1-py3-none-any.whl
 ```
 
 API processはwheelを固定URLから配信する。Gate 2 commandは同じlocal wheelのSHA-256をcloud-initへ
 埋め込むため、API processとcheckで同じfileを指定する。
+
+CaddyでTLS terminationする場合はPythonをloopbackだけへbindし、Python側のTLS引数を省略する。
+外部公開するpathはversion付きartifactと二つのPOST endpointだけに限定する。
+
+```caddyfile
+mc-control-plane.hss-science.org {
+    @allowed <<CEL
+        (method('POST') && path('/v1/host/enroll', '/v1/host/poll'))
+        ||
+        (method('GET') && path('/artifacts/mccp-host-agent-0.1.1.whl'))
+    CEL
+
+    handle @allowed {
+        reverse_proxy http://127.0.0.1:8443
+    }
+
+    handle {
+        respond 404
+    }
+}
+```
+
+この場合の`host-api-serve`は`--bind 127.0.0.1`とし、`--tls-certificate`、
+`--tls-private-key`を指定しない。artifact versionを更新したときはCaddyのexact pathも更新し、
+Host API processを再起動する。
 
 ## 実行
 
@@ -92,7 +117,7 @@ uv run mc-control-plane linode-gate2-check \
   --ssh-public-key ~/.ssh/akamai_ed25519.pub \
   --database ./control-plane.db \
   --control-plane-url https://CONTROL_PLANE_HOST:8443 \
-  --agent-wheel dist/host-agent/mccp_host_agent-0.1.0-py3-none-any.whl \
+  --agent-wheel dist/host-agent/mccp_host_agent-0.1.1-py3-none-any.whl \
   --fixture-image docker.io/library/alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b \
   --confirm-billable-create-reboot-delete
 ```
@@ -121,11 +146,30 @@ credential-free testではenrollment再送・悪用拒否、command再配送、a
 cloud-init secret非表示、所有権付きreboot/deleteを検査している。実accountで上記checkが成功し、
 Cloud ManagerでもLinodeが残っていないことを人間が確認した時点でGate 2全体をCompleteとする。
 
+## 実環境で判明した修正
+
+2026-07-22の最初の試行（Run `gate2-94f1653baecd4a6f80803a86749ce7df`）では、bootstrap、
+enrollment、最初のfixture start/observeまで成功したが、stop後のsystemd状態が`failed`となりrebootへ
+進まなかった。fixtureのshellが300秒の`sleep`中にsignal処理を遅らせた可能性が高いため、1秒以内に
+処理できるloopへ変更した。
+
+この試行から次の診断規則も追加した。
+
+- stop後が`inactive`または`not-found`でなければcommandを失敗とする。
+- command結果へsystemdの`SubState`、`Result`、`ExecMainCode`、`ExecMainStatus`を含める。
+- Gate出力へterminal command resultと最初のoperation errorを表示する。
+- resourceの直接観測が404になった後も、削除直後のtag検索が空になるまでpollする。
+- cleanupも失敗した場合は、operation errorとcleanup errorの両方を表示する。
+
+対象Linode `101124758`の削除自体はAPIの404観測と`linode_delete finished` eventで確認済みである。
+ただしrebootと二回目のfixture sequenceが未実行なので、この試行だけではGate 2をCompleteとしない。
+
 ## 公式資料
 
 - [Debian 13 Podman package](https://packages.debian.org/trixie/podman)
 - [Debian 13 Python 3 package](https://packages.debian.org/trixie/python3)
 - [Debian 13 restic package](https://packages.debian.org/trixie/restic)
 - [Podman Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)
+- [systemd service runtime properties](https://www.freedesktop.org/software/systemd/man/org.freedesktop.systemd1.html)
 - [cloud-init package module](https://docs.cloud-init.io/en/latest/reference/modules.html#package-update-upgrade-install)
 - [Docker Official Alpine image](https://hub.docker.com/_/alpine)
