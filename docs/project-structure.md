@@ -165,18 +165,19 @@ flowchart TD
 1. `ComputeProvider`のAkamai adapterを実装する。（完了）
 2. 所有tagによる検索、create、status観測、deleteを実装する。（完了）
 3. 状態mapping、provider制約、error分類、安全条件を自動testする。（完了）
-4. test用Linode一つでcreate、再観測、deleteを手動実行するintegration testを用意する。
+4. test用Linode一つでcreate、再観測、deleteを行うlive acceptanceを完了する。（完了）
 
-Infrastructure全体を一度に実装せず、Linode lifecycleだけを接続します。
-cloud-init、Host、resticはまだfakeのままにします。
+このMilestoneではInfrastructure全体を一度に実装せず、Linode lifecycleだけを接続しました。
+cloud-initとHostはMilestone 3で接続し、resticは後続Gateまでfakeのままとします。
 
-### Milestone 3: Infra integrationとHost foundation（次に着手）
+### Milestone 3: Infra integrationとHost foundation（live acceptance待ち）
 
-1. opt-inのLinode lifecycle integration harnessを用意する。
-2. metadata user dataをCompute createへ接続する。
-3. outbound Host agentのprotocol、enrollment、local journalを実装する。
-4. Debian 13 cloud-initとfixture Quadletを検証する。
-5. Host observationを保存し、start workflowの`WAIT_HOST`を接続する。
+1. opt-inのLinode lifecycle integration harnessを用意する。（完了）
+2. metadata user dataをCompute createへ接続する。（完了）
+3. outbound Host agentのprotocol、enrollment、local journalを実装する。（完了）
+4. Debian 13 cloud-initとfixture Quadletを検証する。（自動test完了、live acceptance待ち）
+5. Host observationを保存する。（完了）
+6. start workflowの`WAIT_HOST`を接続する。（Gate 3で実施）
 
 Minecraftを起動する前に、SSHなしでfixture containerのapply、start、observe、stop、agent/VM rebootを
 通過させます。詳細なacceptance criteriaは[Operational MVP](operational-mvp.md)のGate 1、2を
@@ -210,13 +211,13 @@ Discord adapterはstart/stop workflowが安定した後に追加します。
 - Execution HostはDebian 13とし、systemd / Podman Quadletを使用する。
 - 通常のHost制御にはoutbound polling agentを使い、SSHはbreak-glass専用とする。
 - Host agentはDebian 13標準Python 3.13をsupportする独立packageとして配布する。
+- Control PlaneのHost APIはHTTPSで固定schemaのversioned protocolだけを公開する。
+- Host commandはat-least-onceで配送し、agentのlocal journalで実行を冪等にする。
+- test用Akamai Cloud resourceには完全なownership identityを付け、自動cleanupする。
 
 次は必要になる直前に短いADRとして決めます。
 
-- Control PlaneのHTTPS server実装とprocess wiring
-- agent protocolの具体的なHTTP resource、JSON schema、versioning規則
 - configuration file schemaとControl Plane secret storeの配置
-- test用Akamai Cloud resourceの命名、tag、cleanup規則
 
 一方、Discord framework、複数worker、汎用plugin system、複数cloud対応は現時点では決めません。
 
@@ -230,7 +231,7 @@ Milestone 1の完成条件は、実cloudを使わず次を自動testできるこ
 - 所有tagが一致しないresourceを削除しない。
 - 各stepの途中で再起動した想定でもworkflowを再開できる。
 
-この土台とAkamai adapterの自動testは完成しています。次はcredentialを通常testから分離した
-opt-in integration testを用意し、test用Linode一つで契約を確認します。その後、Minecraftを使わない
-Host foundationを完成させます。中期目標全体の完成条件は
-[Operational MVP](operational-mvp.md)を正本とします。
+この土台、Akamai adapter、Gate 1 live acceptanceは完成しています。Gate 2もHost protocol、agent、
+cloud-init、Quadlet、rebootを含む自動testとlive harnessまで完成し、実accountでのacceptanceを
+待っています。その後はHost observationを永続workflowへ接続してGate 3へ進みます。中期目標全体の
+完成条件は[Operational MVP](operational-mvp.md)を正本とします。

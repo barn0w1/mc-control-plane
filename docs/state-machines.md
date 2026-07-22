@@ -161,10 +161,13 @@ stateDiagram-v2
     Failed --> Bootstrapping: 明示的retry
 ```
 
-`ready`の判定条件には、少なくともdata directory、Podman、Minecraft image、
-restic、Control Planeとの認証済み通信手段が使用可能であることを含めます。agent/protocol versionが
-非互換なら`ready`にせずOperationを`blocked`にします。具体的なprotocol境界は
-[ADR-0008](decisions/0008-use-outbound-host-agent.md)を参照してください。
+Host protocolの`connected`は互換versionのagentから認証済みpollを受けた状態だけを表し、Hostの
+`ready`とは区別します。Gate 2ではDebian 13、Python、Podman、restic、Quadlet generator、agent
+serviceをcapabilityとservice observationから検証します。運用Runの`ready`にはdata directoryや
+workload artifactなど後続Gateの条件も加えます。agent/protocol versionが非互換なら`ready`にせず
+Operationを`blocked`にします。具体的な境界は
+[ADR-0008](decisions/0008-use-outbound-host-agent.md)と
+[ADR-0010](decisions/0010-use-versioned-host-protocol.md)を参照してください。
 
 ## 5. Minecraft workload state
 
