@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -14,6 +15,7 @@ from mc_control_plane.adapters.outbound.compute import (
 from mc_control_plane.application.ports.compute import (
     ComputeActionUncertain,
     ComputeLifecycle,
+    ComputeOwnershipMismatch,
     ComputeProviderUnavailable,
     ComputeRequestRejected,
     ComputeResourceNotFound,
@@ -35,16 +37,25 @@ class StubInstance:
         status: str = "running",
         region: str = "us-ord",
         tags: set[str] | None = None,
+        has_user_data: bool | None = None,
+        backups_enabled: bool | None = None,
+        firewall_ids: tuple[int, ...] = (),
     ) -> None:
         self.id = resource_id
         self.status = status
         self.region = StubRegion(region)
         self.tags = list(tags or set())
+        self.has_user_data = has_user_data
+        self.backups = type("Backups", (), {"enabled": backups_enabled})()
+        self._firewalls = [type("FirewallRef", (), {"id": item})() for item in firewall_ids]
         self.deleted = False
 
     def delete(self) -> bool:
         self.deleted = True
         return True
+
+    def firewalls(self) -> list[object]:
+        return self._firewalls
 
 
 class StubLinodeGroup:
@@ -72,10 +83,17 @@ class StubClient:
     def __init__(self) -> None:
         self.linode = StubLinodeGroup()
         self.loaded: StubInstance | Exception | None = None
+        self.loaded_by_target: dict[str, object | Exception] = {}
         self.load_id: int | None = None
 
-    def load(self, _target: object, resource_id: int) -> StubInstance:
-        self.load_id = resource_id
+    def load(self, target: object, resource_id: int | str) -> object:
+        self.load_id = resource_id if isinstance(resource_id, int) else None
+        target_name = getattr(target, "__name__", str(target))
+        if target_name in self.loaded_by_target:
+            result = self.loaded_by_target[target_name]
+            if isinstance(result, Exception):
+                raise result
+            return result
         if isinstance(self.loaded, Exception):
             raise self.loaded
         assert self.loaded is not None
@@ -163,15 +181,33 @@ def test_create_sends_owned_tags_authentication_and_existing_firewall(
         tags=set(identity.tags),
     )
 
-    observation = provider.create_runtime(RuntimeCreateRequest(identity=identity, spec=spec))
+    observation = provider.create_runtime(
+        RuntimeCreateRequest(
+            identity=identity,
+            spec=spec,
+            metadata_user_data="#cloud-config\n",
+            expires_at=datetime(2026, 7, 22, 12, 34, 56, tzinfo=UTC),
+        )
+    )
 
     assert observation.provider_resource_id == "42"
     assert observation.lifecycle is ComputeLifecycle.PENDING
     assert client.linode.create_args == ("g6-standard-2", "us-ord")
     assert client.linode.create_kwargs["image"] == "linode/ubuntu24.04"
     assert client.linode.create_kwargs["authorized_keys"] == ["ssh-ed25519 AAAA test"]
-    assert client.linode.create_kwargs["firewall"] == 12345
-    assert set(client.linode.create_kwargs["tags"]) == set(identity.tags)
+    assert client.linode.create_kwargs["interface_generation"] == "linode"
+    assert client.linode.create_kwargs["interfaces"] == [
+        {
+            "firewall_id": 12345,
+            "default_route": {"ipv4": True, "ipv6": True},
+            "public": {},
+        }
+    ]
+    assert "firewall" not in client.linode.create_kwargs
+    assert set(client.linode.create_kwargs["tags"]) == set(identity.tags) | {
+        "mccp:expires=20260722T123456Z"
+    }
+    assert client.linode.create_kwargs["metadata"] == {"user_data": "I2Nsb3VkLWNvbmZpZwo="}
     assert client.linode.create_kwargs["booted"] is True
     assert client.linode.create_kwargs["backups_enabled"] is False
     assert len(client.linode.create_kwargs["label"]) <= 64
@@ -228,7 +264,133 @@ def test_delete_of_already_absent_instance_is_idempotent(
 ) -> None:
     client.loaded = ApiError("missing", status=404)
 
-    provider.delete_runtime("42")
+    identity = ResourceIdentity("main", "survival", "run-1")
+    provider.delete_runtime("42", identity)
+
+
+def test_delete_checks_exact_ownership_inside_adapter(
+    provider: LinodeComputeProvider,
+    client: StubClient,
+    identity: ResourceIdentity,
+) -> None:
+    instance = StubInstance(42, tags={"unmanaged"})
+    client.loaded = instance
+
+    with pytest.raises(ComputeOwnershipMismatch):
+        provider.delete_runtime("42", identity)
+
+    assert instance.deleted is False
+
+
+def test_delete_owned_instance(
+    provider: LinodeComputeProvider,
+    client: StubClient,
+    identity: ResourceIdentity,
+) -> None:
+    instance = StubInstance(42, tags=set(identity.tags))
+    client.loaded = instance
+
+    provider.delete_runtime("42", identity)
+
+    assert instance.deleted is True
+
+
+def test_reads_firewall_ids_actually_attached_to_instance(
+    provider: LinodeComputeProvider,
+    client: StubClient,
+) -> None:
+    client.loaded = StubInstance(42, firewall_ids=(12345, 67890))
+
+    attached = provider.attached_firewall_ids("42")
+
+    assert attached == frozenset({"12345", "67890"})
+
+
+@dataclass
+class StubProviderRegion:
+    id: str = "us-ord"
+    status: str = "ok"
+    capabilities: tuple[str, ...] = ("Linodes", "Metadata")
+
+
+@dataclass
+class StubProviderType:
+    id: str = "g6-standard-2"
+
+
+@dataclass
+class StubProviderImage:
+    id: str = "linode/debian13"
+    status: str = "available"
+    capabilities: tuple[str, ...] = ("cloud-init",)
+    deprecated: bool = False
+
+
+@dataclass
+class StubProviderFirewall:
+    id: int = 12345
+    status: str = "enabled"
+
+
+def _preflight_resources(client: StubClient) -> None:
+    client.loaded_by_target = {
+        "Region": StubProviderRegion(),
+        "Type": StubProviderType(),
+        "Image": StubProviderImage(),
+        "Firewall": StubProviderFirewall(),
+    }
+
+
+def test_preflight_validates_region_image_type_and_firewall(
+    provider: LinodeComputeProvider,
+    client: StubClient,
+    spec: RuntimeSpec,
+) -> None:
+    _preflight_resources(client)
+
+    report = provider.validate_runtime_spec(spec)
+
+    assert report.region == "us-ord"
+    assert report.instance_type == "g6-standard-2"
+    assert report.firewall_id == "12345"
+    assert report.metadata_supported is True
+
+
+def test_preflight_rejects_region_without_metadata(
+    provider: LinodeComputeProvider,
+    client: StubClient,
+    spec: RuntimeSpec,
+) -> None:
+    _preflight_resources(client)
+    client.loaded_by_target["Region"] = StubProviderRegion(capabilities=("Linodes",))
+
+    with pytest.raises(ComputeRequestRejected, match="Metadata"):
+        provider.validate_runtime_spec(spec)
+
+
+def test_preflight_requires_explicit_positive_firewall(
+    provider: LinodeComputeProvider,
+    spec: RuntimeSpec,
+) -> None:
+    missing = RuntimeSpec(
+        region=spec.region,
+        instance_type=spec.instance_type,
+        image=spec.image,
+        container_image=spec.container_image,
+        firewall_id=None,
+    )
+    invalid = RuntimeSpec(
+        region=spec.region,
+        instance_type=spec.instance_type,
+        image=spec.image,
+        container_image=spec.container_image,
+        firewall_id="-1",
+    )
+
+    with pytest.raises(ComputeRequestRejected, match="explicit existing firewall"):
+        provider.validate_runtime_spec(missing)
+    with pytest.raises(ComputeRequestRejected, match="positive integer"):
+        provider.validate_runtime_spec(invalid)
 
 
 def test_settings_require_an_ssh_key() -> None:

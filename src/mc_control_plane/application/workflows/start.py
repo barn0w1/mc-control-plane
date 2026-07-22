@@ -7,6 +7,7 @@ from datetime import timedelta
 from mc_control_plane.application.ports.compute import (
     ComputeActionUncertain,
     ComputeLifecycle,
+    ComputeOwnershipMismatch,
     ComputeProvider,
     ComputeProviderUnavailable,
     ComputeRequestRejected,
@@ -334,7 +335,7 @@ def delete_owned_runtime(
     identity: ResourceIdentity,
     provider_resource_id: str,
 ) -> None:
-    observation = compute.observe_runtime(provider_resource_id)
-    if not identity.owns(observation.tags):
-        raise ResourceOwnershipMismatch(provider_resource_id)
-    compute.delete_runtime(provider_resource_id)
+    try:
+        compute.delete_runtime(provider_resource_id, identity)
+    except ComputeOwnershipMismatch as error:
+        raise ResourceOwnershipMismatch(provider_resource_id) from error

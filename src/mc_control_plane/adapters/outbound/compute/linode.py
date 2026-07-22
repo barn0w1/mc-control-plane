@@ -1,11 +1,20 @@
 """Akamai Cloud Compute adapter backed by the official Linode Python SDK."""
 
+from base64 import b64encode
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import UTC
 from hashlib import blake2s
 from typing import Any, TypeVar, cast
 
-from linode_api4 import Instance, LinodeClient  # type: ignore[import-untyped]
+from linode_api4 import (  # type: ignore[import-untyped]
+    Firewall,
+    Image,
+    Instance,
+    LinodeClient,
+    Region,
+    Type,
+)
 from linode_api4.errors import (  # type: ignore[import-untyped]
     ApiError,
     UnexpectedResponseError,
@@ -16,13 +25,14 @@ from requests.exceptions import RequestException
 from mc_control_plane.application.ports.compute import (
     ComputeActionUncertain,
     ComputeLifecycle,
+    ComputeOwnershipMismatch,
     ComputeProviderUnavailable,
     ComputeRequestRejected,
     ComputeResourceNotFound,
     RuntimeCreateRequest,
     RuntimeObservation,
 )
-from mc_control_plane.domain.models import resource_scope_tags
+from mc_control_plane.domain.models import ResourceIdentity, RuntimeSpec, resource_scope_tags
 
 _T = TypeVar("_T")
 _TRANSIENT_HTTP_STATUSES = frozenset({408, 429})
@@ -72,6 +82,17 @@ class LinodeComputeSettings:
             raise ValueError("authorized SSH keys must not be empty")
         if self.connect_timeout_seconds <= 0 or self.read_timeout_seconds <= 0:
             raise ValueError("Linode API timeouts must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class LinodeRuntimePreflight:
+    """Provider facts checked before a billable create request."""
+
+    region: str
+    instance_type: str
+    image: str
+    firewall_id: str | None
+    metadata_supported: bool
 
 
 class _TimeoutSession(Session):
@@ -134,16 +155,31 @@ class LinodeComputeProvider:
 
         def create() -> RuntimeObservation:
             client = cast(Any, self._client)
+            kwargs: dict[str, object] = {
+                "image": request.spec.image,
+                "authorized_keys": list(self._settings.authorized_keys),
+                "label": self._label(request),
+                "tags": sorted(self._create_tags(request)),
+                "booted": True,
+                "backups_enabled": False,
+            }
+            if firewall is not None:
+                kwargs["interface_generation"] = "linode"
+                kwargs["interfaces"] = [
+                    {
+                        "firewall_id": firewall,
+                        "default_route": {"ipv4": True, "ipv6": True},
+                        "public": {},
+                    }
+                ]
+            if request.metadata_user_data is not None:
+                kwargs["metadata"] = {
+                    "user_data": b64encode(request.metadata_user_data.encode()).decode()
+                }
             instance = client.linode.instance_create(
                 request.spec.instance_type,
                 request.spec.region,
-                image=request.spec.image,
-                authorized_keys=list(self._settings.authorized_keys),
-                firewall=firewall,
-                label=self._label(request),
-                tags=sorted(request.identity.tags),
-                booted=True,
-                backups_enabled=False,
+                **kwargs,
             )
             return self._observation(instance)
 
@@ -165,12 +201,19 @@ class LinodeComputeProvider:
 
         return self._read(observe, resource_id=provider_resource_id)
 
-    def delete_runtime(self, provider_resource_id: str) -> None:
+    def delete_runtime(
+        self,
+        provider_resource_id: str,
+        identity: ResourceIdentity,
+    ) -> None:
         resource_id = self._resource_id(provider_resource_id)
 
         try:
             client = cast(Any, self._client)
             instance = client.load(Instance, resource_id)
+            observation = self._observation(instance)
+            if not identity.owns(observation.tags):
+                raise ComputeOwnershipMismatch(provider_resource_id)
             instance.delete()
         except ApiError as error:
             if error.status == 404:
@@ -180,6 +223,91 @@ class LinodeComputeProvider:
             raise ComputeRequestRejected(self._error_message(error)) from error
         except (UnexpectedResponseError, RequestException) as error:
             raise ComputeActionUncertain(self._error_message(error)) from error
+
+    def validate_runtime_spec(
+        self,
+        spec: RuntimeSpec,
+        *,
+        require_metadata: bool = True,
+        require_firewall: bool = True,
+    ) -> LinodeRuntimePreflight:
+        """Validate stable provider configuration without creating resources.
+
+        This intentionally does not promise capacity. Capacity can change after
+        the check, so the create response remains authoritative.
+        """
+
+        firewall_id = self._firewall_id(spec.firewall_id)
+        if require_firewall and firewall_id is None:
+            raise ComputeRequestRejected("an explicit existing firewall is required")
+
+        def validate() -> LinodeRuntimePreflight:
+            client = cast(Any, self._client)
+            region = client.load(Region, spec.region)
+            region_status = self._string_value(region.status)
+            region_capabilities = self._string_set(region.capabilities)
+            if region_status != "ok":
+                raise ComputeRequestRejected(
+                    f"Linode region {spec.region!r} is not operational: {region_status!r}"
+                )
+            if "Linodes" not in region_capabilities:
+                raise ComputeRequestRejected(
+                    f"Linode region {spec.region!r} does not support Linodes"
+                )
+            if require_metadata and "Metadata" not in region_capabilities:
+                raise ComputeRequestRejected(
+                    f"Linode region {spec.region!r} does not support Metadata"
+                )
+
+            instance_type = client.load(Type, spec.instance_type)
+            if str(instance_type.id) != spec.instance_type:
+                raise ComputeRequestRejected(
+                    f"Linode type resolved unexpectedly: {instance_type.id!r}"
+                )
+
+            image = client.load(Image, spec.image)
+            image_status = self._string_value(image.status)
+            image_capabilities = self._string_set(image.capabilities)
+            if image_status != "available":
+                raise ComputeRequestRejected(
+                    f"Linode image {spec.image!r} is not available: {image_status!r}"
+                )
+            if bool(image.deprecated):
+                raise ComputeRequestRejected(f"Linode image {spec.image!r} is deprecated")
+            if require_metadata and "cloud-init" not in image_capabilities:
+                raise ComputeRequestRejected(
+                    f"Linode image {spec.image!r} does not support cloud-init"
+                )
+
+            if firewall_id is not None:
+                firewall = client.load(Firewall, firewall_id)
+                firewall_status = self._string_value(firewall.status)
+                if firewall_status != "enabled":
+                    raise ComputeRequestRejected(
+                        f"Linode firewall {firewall_id} is not enabled: {firewall_status!r}"
+                    )
+
+            return LinodeRuntimePreflight(
+                region=spec.region,
+                instance_type=spec.instance_type,
+                image=spec.image,
+                firewall_id=str(firewall_id) if firewall_id is not None else None,
+                metadata_supported=require_metadata,
+            )
+
+        return self._read(validate)
+
+    def attached_firewall_ids(self, provider_resource_id: str) -> frozenset[str]:
+        """Return firewall IDs actually attached to one Linode."""
+
+        resource_id = self._resource_id(provider_resource_id)
+
+        def read_firewalls() -> frozenset[str]:
+            client = cast(Any, self._client)
+            instance = client.load(Instance, resource_id)
+            return frozenset(str(firewall.id) for firewall in instance.firewalls())
+
+        return self._read(read_firewalls, resource_id=provider_resource_id)
 
     def _read(
         self,
@@ -202,6 +330,8 @@ class LinodeComputeProvider:
         raw = cast(Any, instance)
         status_value = getattr(raw.status, "value", raw.status)
         region_value = getattr(raw.region, "id", raw.region)
+        backups = getattr(raw, "backups", None)
+        backups_enabled = getattr(backups, "enabled", None)
         return RuntimeObservation(
             provider_resource_id=str(raw.id),
             provider=self.provider_name,
@@ -209,6 +339,10 @@ class LinodeComputeProvider:
             raw_status=str(status_value),
             lifecycle=map_linode_status(str(status_value)),
             tags=frozenset(str(tag) for tag in raw.tags),
+            has_user_data=(
+                bool(raw.has_user_data) if getattr(raw, "has_user_data", None) is not None else None
+            ),
+            backups_enabled=(bool(backups_enabled) if backups_enabled is not None else None),
         )
 
     @staticmethod
@@ -225,9 +359,29 @@ class LinodeComputeProvider:
         if firewall_id is None:
             return None
         try:
-            return int(firewall_id)
+            parsed = int(firewall_id)
         except ValueError as error:
             raise ComputeRequestRejected(f"invalid Linode firewall id: {firewall_id!r}") from error
+        if parsed <= 0:
+            raise ComputeRequestRejected(
+                f"Linode firewall id must be a positive integer: {firewall_id!r}"
+            )
+        return parsed
+
+    @staticmethod
+    def _create_tags(request: RuntimeCreateRequest) -> frozenset[str]:
+        if request.expires_at is None:
+            return request.identity.tags
+        expiration = request.expires_at.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+        return request.identity.tags | {f"mccp:expires={expiration}"}
+
+    @staticmethod
+    def _string_value(value: object) -> str:
+        return str(getattr(value, "value", value))
+
+    @classmethod
+    def _string_set(cls, values: Iterable[object]) -> frozenset[str]:
+        return frozenset(cls._string_value(value) for value in values)
 
     @staticmethod
     def _label(request: RuntimeCreateRequest) -> str:
