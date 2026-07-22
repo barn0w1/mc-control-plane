@@ -47,7 +47,8 @@ tests/
 └── e2e/
 
 docs/
-└── decisions/
+├── decisions/
+└── operational-mvp.md
 ```
 
 初期段階ではファイルを細かく分けすぎません。例えばdomain entityが少ない間は`models.py`へ置き、
@@ -159,7 +160,7 @@ flowchart TD
 
 この段階ではcloud accountへ接続しません。
 
-### Milestone 2: Akamai Cloud vertical slice（進行中）
+### Milestone 2: Akamai Cloud vertical slice（自動testまで完了）
 
 1. `ComputeProvider`のAkamai adapterを実装する。（完了）
 2. 所有tagによる検索、create、status観測、deleteを実装する。（完了）
@@ -169,26 +170,32 @@ flowchart TD
 Infrastructure全体を一度に実装せず、Linode lifecycleだけを接続します。
 cloud-init、Host、resticはまだfakeのままにします。
 
-### Milestone 3: Reconciler processと再開
+### Milestone 3: Infra integrationとHost foundation（次に着手）
+
+1. opt-inのLinode lifecycle integration harnessを用意する。
+2. metadata user dataをCompute createへ接続する。
+3. outbound Host agentのprotocol、enrollment、local journalを実装する。
+4. Debian 13 cloud-initとfixture Quadletを検証する。
+5. Host observationを保存し、start workflowの`WAIT_HOST`を接続する。
+
+Minecraftを起動する前に、SSHなしでfixture containerのapply、start、observe、stop、agent/VM rebootを
+通過させます。詳細なacceptance criteriaは[Operational MVP](operational-mvp.md)のGate 1、2を
+参照してください。
+
+### Milestone 4: Reconciler processと再開
 
 1. due Operationを一stepずつ進める単一reconciler loopを実装する。
-2. CLIからOperationを作成し、状態を読み取れるようにする。
+2. CLIからServer Unit、Operation、レイヤー別観測を扱えるようにする。
 3. Control Planeをstep間で再起動しても再開できることをtestする。
 4. process終了とgraceful shutdownを実装する。
 
-### Milestone 4: Hostとrestore
+### Milestone 5: DataとMinecraft lifecycle
 
-1. cloud-initの最小bootstrapを定義する。
-2. Host protocolとreadinessを実装する。
-3. restic restoreを接続する。
-4. Minecraft containerのstartとreadinessを接続する。
-
-### Milestone 5: stopとsnapshot
-
-1. graceful stopを接続する。
-2. restic snapshotとsnapshot ID記録を接続する。
+1. R2 temporary credentialとrestic restore/snapshotをfixture dataで接続する。
+2. `itzg/minecraft-server` Quadletのstart、readiness、graceful stopを接続する。
 3. snapshot commit後だけLinodeを削除するworkflowを完成させる。
-4. 定期snapshotとretention maintenanceを追加する。
+4. 定期snapshot、quiesce/resume、retention maintenanceを追加する。
+5. fresh Linodeへの再restoreまでend-to-endで確認する。
 
 CLIは各Milestoneを手動で動かせる薄い入口として早期に用意します。
 Discord adapterはstart/stop workflowが安定した後に追加します。
@@ -200,17 +207,20 @@ Discord adapterはstart/stop workflowが安定した後に追加します。
 - SQLiteとversion付きmigrationを使用する。
 - 同期application coreと、永続Operationを一stepずつ進める単一reconcilerを使用する。
 - task queue、message broker、複数writerは使用しない。
+- Execution HostはDebian 13とし、systemd / Podman Quadletを使用する。
+- 通常のHost制御にはoutbound polling agentを使い、SSHはbreak-glass専用とする。
+- Host agentはDebian 13標準Python 3.13をsupportする独立packageとして配布する。
 
 次は必要になる直前に短いADRとして決めます。
 
-- workflowを起動するprocess modelとpolling方法
-- Hostとの通信protocol
-- configurationとsecretの供給方法
+- Control PlaneのHTTPS server実装とprocess wiring
+- agent protocolの具体的なHTTP resource、JSON schema、versioning規則
+- configuration file schemaとControl Plane secret storeの配置
 - test用Akamai Cloud resourceの命名、tag、cleanup規則
 
 一方、Discord framework、複数worker、汎用plugin system、複数cloud対応は現時点では決めません。
 
-## 7. 最初の完成条件
+## 7. 現在の完成条件
 
 Milestone 1の完成条件は、実cloudを使わず次を自動testできることです。
 
@@ -221,4 +231,6 @@ Milestone 1の完成条件は、実cloudを使わず次を自動testできるこ
 - 各stepの途中で再起動した想定でもworkflowを再開できる。
 
 この土台とAkamai adapterの自動testは完成しています。次はcredentialを通常testから分離した
-opt-in integration testを用意し、test用Linode一つで契約を確認します。
+opt-in integration testを用意し、test用Linode一つで契約を確認します。その後、Minecraftを使わない
+Host foundationを完成させます。中期目標全体の完成条件は
+[Operational MVP](operational-mvp.md)を正本とします。

@@ -11,8 +11,11 @@ flowchart TD
     User["CLI / 将来のDiscord Bot"] --> Control["Python Control Plane"]
     Control --> Akamai["Akamai Cloud<br/>Linode"]
     Control --> R2["Cloudflare R2<br/>restic repository"]
-    Akamai --> Host["cloud-init / Podman<br/>itzg/minecraft-server"]
-    Host <--> R2
+    Akamai --> Host["Debian 13<br/>cloud-init"]
+    Host --> Agent["Host agent<br/>outbound HTTPS"]
+    Agent --> Control
+    Agent --> Runtime["systemd / Podman Quadlet<br/>itzg/minecraft-server"]
+    Agent <--> R2
 ```
 
 ## 確定している方針
@@ -23,11 +26,14 @@ flowchart TD
 - Paper、plugin、Minecraft設定の内容は管理しない。Server Unitに関連する不透明なpayloadとして保存・復元する。
 - 同じServer Unitを同時に複数のLinodeで起動しない。
 - CLIを最初の操作インターフェイスとし、Discord Botなどは後から同じapplication use caseへ接続する。
+- Execution HostはDebian 13とし、container lifecycleをsystemd / Podman Quadletで管理する。
+- 通常のHost制御にはoutbound polling agentを使い、SSHは手動調査専用とする。
 - 商用サービス級の高可用性は目標にしない。定期snapshotと単純で回復可能な処理を優先する。
 
 ## ドキュメント
 
 - [Architecture](docs/architecture.md)
+- [中期目標: Operational MVP](docs/operational-mvp.md)
 - [Project structure](docs/project-structure.md)
 - [State machines](docs/state-machines.md)
 - [ADR-0001: resticをバックアップエンジンに採用する](docs/decisions/0001-use-restic.md)
@@ -36,6 +42,8 @@ flowchart TD
 - [ADR-0004: Control Plane databaseにSQLiteを使用する](docs/decisions/0004-use-sqlite.md)
 - [ADR-0005: 永続化されたOperationを同期的に一stepずつ処理する](docs/decisions/0005-use-stepwise-reconciler.md)
 - [ADR-0006: 公式Linode SDKをCompute adapter内に隔離して使用する](docs/decisions/0006-use-official-linode-sdk.md)
+- [ADR-0007: Debian 13上のcontainer lifecycleにPodman Quadletを使用する](docs/decisions/0007-use-quadlet-on-debian-13.md)
+- [ADR-0008: 通常のHost制御にoutbound polling Host agentを使用する](docs/decisions/0008-use-outbound-host-agent.md)
 
 ## 現在の段階
 
@@ -43,6 +51,8 @@ flowchart TD
 公式SDKを使うAkamai Cloud Compute adapterまで実装しています。adapterは所有tagによる検索、
 作成、状態観測、安全な削除を実装済みですが、実accountを変更するintegration testと
 cloud-init/Host制御はまだ接続していません。
+中期的には、Infra lifecycleとDebian 13 Host foundationをMinecraftより先に完成させ、
+その上で一つのServer Unitのstart、snapshot、stop、再restoreを一周させます。
 後方互換性はまだ要求せず、実装から得た知見に基づく破壊的変更を許容します。
 
 ## Development
