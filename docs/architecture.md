@@ -184,6 +184,8 @@ Snapshot作成に失敗した場合はLinodeを削除しません。商用サー
 
 - バックアップエンジンはresticとする。
 - R2 bucket内ではServer Unitごとにrepositoryまたはprefixを分離する。
+- repositoryは空passwordで初期化し、すべてのrestic repository commandへ
+  `--insecure-no-password`を明示する。別管理のrepository secretは持たない。
 - restore対象は`latest`ではなく、Control Planeが記録したsnapshot IDで指定する。
 - Linodeのhostnameは実行ごとに変わるため、Server Unit専用repository内ではresticのhost識別子を
   固定値にする。
@@ -202,7 +204,11 @@ Snapshot作成に失敗した場合はLinodeを削除しません。商用サー
 - restore/snapshotの実行時だけ、Server Unitのprefixと必要operationへ限定した短命なR2 credentialを
   authenticated agent channelで渡す。
 - data credentialをcloud-init、ログ、Quadlet、agent journal、DBの通常カラムへ平文で残さない。
-- repository passwordはR2 credentialと別のsecretとして管理する。
+- restic repository passwordは使用しない。R2へのaccess-controlはprefix、permission、TTLへ限定した
+  temporary credentialで行う。
+
+restic repository formatは空passwordでも内部データを暗号化・認証する。これは無効化できないformat上の
+性質であり、機密性の境界としては扱わない。R2 credentialを取得した主体はrepositoryを読める前提とする。
 
 Cloudflare R2は一つのbucket、操作、prefix、TTLへ制限したtemporary credentialを発行でき、resticは`AWS_SESSION_TOKEN`を利用できます。
 

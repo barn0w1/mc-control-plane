@@ -73,11 +73,11 @@ sequenceDiagram
 ### Secret delivery
 
 - Akamai token、R2 parent credential、Host enrollment tokenを同じsecretとして使い回さない。
-- R2 parent credentialとrestic repository passwordはControl Planeだけが保持する。
+- R2 parent credentialはControl Planeだけが保持する。restic repository passwordは使用しない。
 - restore/snapshotの直前に、Server Unit prefixと必要operationへ限定した短命R2 credentialを発行し、
   authenticated agent channelでそのcommandだけに渡す。
 - data credentialはagent journal、通常log、Quadlet、cloud-init、Control Plane databaseへ保存しない。
-  agentはmemoryまたは`/run`上のroot専用temporary fileでresticへ渡し、command終了時に破棄する。
+  agentはcommand実行中のsubprocess environmentへだけ展開する。
 - 将来resticを独立したsystemd serviceとして起動する場合はsystemd credential機構を使う。
   secretをunit fileのliteralや広く継承されるenvironmentへ置かない。
 

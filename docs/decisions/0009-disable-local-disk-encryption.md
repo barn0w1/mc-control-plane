@@ -5,8 +5,8 @@
 
 ## Context
 
-Execution Hostのroot diskはRun中の作業領域であり、長期的な復旧点はR2上の暗号化されたrestic
-snapshotである。Minecraft worldのsaveやrestoreはdisk I/Oを使い、Akamaiの公式資料はlocal disk
+Execution Hostのroot diskはRun中の作業領域であり、長期的な復旧点はR2上のrestic snapshotである。
+Minecraft worldのsaveやrestoreはdisk I/Oを使い、Akamaiの公式資料はlocal disk
 encryptionがCPU overheadを増やし、実効throughputを下げる可能性があるとしている。
 
 一方、local disk encryptionは物理driveが取り外し、廃棄された場合のdata at restを保護する。
@@ -17,8 +17,8 @@ encryptionがCPU overheadを増やし、実効throughputを下げる可能性が
 - Control Planeが作るLinodeには`disk_encryption="disabled"`を明示する。provider既定値へ依存しない。
 - 作成後のprovider observationでも`disk_encryption=disabled`を確認する。
 - disk encryptionを無効化できないdistributed regionは、現在のExecution Host対象外とする。
-- API token、enrollment token、R2 temporary credential、restic passwordは短命かつ必要時だけ渡し、
-  root diskへ長期保存しない。このsecret管理要件をdisk encryptionの代替として緩和しない。
+- API token、enrollment token、R2 temporary credentialは短命かつ必要時だけ渡し、root diskへ長期保存
+  しない。このsecret管理要件をdisk encryptionの代替として緩和しない。
 
 ## Consequences
 

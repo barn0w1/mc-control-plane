@@ -154,7 +154,7 @@ Infra/Hostを「後で直す仮実装」にしないため、各Gateに次を要
 - 外部adapterはcontract testを持ち、実credentialを使うtestはopt-inにする。
 - create、delete、restore、snapshot、start、stopにはtimeoutと再観測規則を持つ。
 - 破壊的actionはresource identity、ownership、現在状態を直前に検査する。
-- logへtoken、R2 credential、repository password、Minecraft payloadを出さない。
+- logへtoken、R2 credential、Minecraft payloadを出さない。
 - protocol、schema、cloud-init、Quadletはrepositoryでversion管理し、生成結果をtestする。
 - 実環境で発見した挙動は再現可能なtestまたはADRへ戻す。
 

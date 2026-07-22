@@ -29,6 +29,7 @@ flowchart TD
 - Execution HostはDebian 13とし、container lifecycleをsystemd / Podman Quadletで管理する。
 - 通常のHost制御にはoutbound polling agentを使い、SSHは手動調査専用とする。
 - Execution HostはLinode Interfacesだけを使い、一時root diskのlocal disk encryptionを無効にする。
+- restic repositoryは空passwordで運用し、R2 credential以外の復元secretを持たない。
 - 商用サービス級の高可用性は目標にしない。定期snapshotと単純で回復可能な処理を優先する。
 
 ## ドキュメント
@@ -53,6 +54,7 @@ flowchart TD
 - [ADR-0010: versioned closed Host protocolとat-least-once配送を使用する](docs/decisions/0010-use-versioned-host-protocol.md)
 - [ADR-0011: Run単位でHost enrollment credentialを決定的に導出する](docs/decisions/0011-derive-run-enrollment.md)
 - [ADR-0012: data credentialを永続HostCommandから分離する](docs/decisions/0012-deliver-ephemeral-data-leases.md)
+- [ADR-0013: restic repositoryを空passwordで運用する](docs/decisions/0013-use-passwordless-restic-repositories.md)
 
 ## 現在の段階
 
