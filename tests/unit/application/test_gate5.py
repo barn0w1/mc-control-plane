@@ -1,21 +1,15 @@
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
+from mc_control_plane.adapters.outbound.persistence import HostProtocolStore
 from mc_control_plane.application.gate5 import (
     Gate5Error,
     _validate_minecraft_spec,
     _verify_host_runtime,
 )
-
-
-class _Store:
-    pass
-
-
-class _Clock:
-    pass
+from mc_control_plane.application.ports.support import Clock
 
 
 def test_gate5_requires_reproducibly_pinned_minecraft_inputs() -> None:
@@ -55,10 +49,10 @@ def test_gate5_rejects_host_that_cannot_observe_podman(
 
     with pytest.raises(Gate5Error, match="cannot observe"):
         _verify_host_runtime(
-            _Store(),  # type: ignore[arg-type]
+            cast(HostProtocolStore, object()),
             "agent-1",
             "unit-1",
-            _Clock(),  # type: ignore[arg-type]
+            cast(Clock, object()),
             10,
             1,
             lambda _: None,
@@ -81,10 +75,10 @@ def test_gate5_accepts_fresh_observable_podman(
     report: Callable[[str], None] = messages.append
 
     _verify_host_runtime(
-        _Store(),  # type: ignore[arg-type]
+        cast(HostProtocolStore, object()),
         "agent-1",
         "unit-1",
-        _Clock(),  # type: ignore[arg-type]
+        cast(Clock, object()),
         10,
         1,
         lambda _: None,
