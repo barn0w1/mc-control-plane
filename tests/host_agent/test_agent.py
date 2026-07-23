@@ -4,6 +4,7 @@ from typing import Any
 from mccp_host_agent.agent import HostAgent
 from mccp_host_agent.config import AgentConfig, load_config, save_config
 from mccp_host_agent.journal import CommandJournal
+from mccp_host_agent.runtime import HostActionError
 
 IMAGE = "docker.io/library/alpine@sha256:" + "a" * 64
 
@@ -30,6 +31,8 @@ class FakeRuntime:
         self.applies = 0
         self.minecraft_applies: list[dict[str, object]] = []
         self.minecraft_snapshots: list[tuple[str, dict[str, Any]]] = []
+        self.apply_error: HostActionError | None = None
+        self.inspect_error: HostActionError | None = None
 
     def boot_id(self) -> str:
         return "boot-1"
@@ -41,9 +44,13 @@ class FakeRuntime:
         return {"agent": "active", "fixture": "inactive"}
 
     def inspect(self) -> dict[str, object]:
+        if self.inspect_error is not None:
+            raise self.inspect_error
         return {"fixture": "inactive"}
 
     def apply_fixture(self) -> dict[str, object]:
+        if self.apply_error is not None:
+            raise self.apply_error
         self.applies += 1
         return {"fixture": "inactive", "revision": "revision"}
 
@@ -146,6 +153,45 @@ def test_redelivered_completed_command_is_not_executed_again(tmp_path: Path) -> 
     agent.run_once()
 
     assert runtime.applies == 1
+
+
+def test_agent_journals_primary_failure_when_diagnostic_observation_fails(
+    tmp_path: Path,
+) -> None:
+    config = AgentConfig(
+        control_plane_url="https://control.example.test",
+        agent_id="agent-1",
+        run_id="run-1",
+        resource_identity="resource-1",
+        enrollment_token=None,
+        fixture_image=IMAGE,
+    )
+    runtime = FakeRuntime()
+    runtime.apply_error = HostActionError("apply_failed", "primary failure")
+    runtime.inspect_error = HostActionError(
+        "minecraft_observation_failed",
+        "Podman storage is read-only",
+    )
+    journal = CommandJournal(tmp_path / "journal.db")
+    agent = HostAgent(
+        config,
+        config_path=tmp_path / "config.json",
+        token_path=tmp_path / "agent-token",
+        journal=journal,
+        client=FakeClient(_command()),  # type: ignore[arg-type]
+        runtime=runtime,  # type: ignore[arg-type]
+    )
+
+    assert agent.run_once() == 0
+    result = journal.unreported()[0].value
+    assert result["state"] == "failed"
+    assert result["error_code"] == "apply_failed"
+    assert result["message"] == "primary failure"
+    assert result["observation"] == {
+        "status": "unavailable",
+        "error_code": "minecraft_observation_failed",
+        "message": "Podman storage is read-only",
+    }
 
 
 def test_agent_dispatches_closed_minecraft_commands(tmp_path: Path) -> None:

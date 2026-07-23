@@ -123,10 +123,14 @@ class HostRuntime:
         return value
 
     def service_states(self) -> dict[str, str]:
+        try:
+            minecraft = str(self.observe_minecraft()["minecraft"])
+        except HostActionError:
+            minecraft = "unknown"
         return {
             "agent": self._service_state(AGENT_UNIT),
             "fixture": self._service_state(FIXTURE_UNIT),
-            "minecraft": str(self.observe_minecraft()["minecraft"]),
+            "minecraft": minecraft,
         }
 
     def inspect(self) -> dict[str, object]:
@@ -275,7 +279,9 @@ class HostRuntime:
             observation = self._minecraft_observation()
         if observation["minecraft"] != "ready":
             raise HostActionError(
-                "minecraft_not_ready", f"Minecraft state is {observation['minecraft']}"
+                "minecraft_not_ready",
+                f"Minecraft state is {observation['minecraft']}; "
+                f"{self._minecraft_start_diagnostics()}",
             )
         return observation
 
@@ -545,18 +551,44 @@ class HostRuntime:
         return {"minecraft": state, "systemd": systemd, "container": container}
 
     def _minecraft_container_state(self) -> dict[str, object]:
-        result = self._runner.run(
-            (
-                "podman",
-                "inspect",
-                "--format",
-                "{{json .State}}",
-                MINECRAFT_CONTAINER,
-            ),
-            timeout=15,
-        )
-        if result.returncode != 0:
+        try:
+            exists = self._runner.run(
+                ("podman", "container", "exists", MINECRAFT_CONTAINER),
+                timeout=15,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise HostActionError(
+                "minecraft_observation_failed",
+                "Podman container existence check could not run",
+            ) from error
+        if exists.returncode == 1:
             return {"status": "absent", "health": "absent", "paused": False}
+        if exists.returncode != 0:
+            raise HostActionError(
+                "minecraft_observation_failed",
+                self._podman_failure("container exists", exists),
+            )
+        try:
+            result = self._runner.run(
+                (
+                    "podman",
+                    "inspect",
+                    "--format",
+                    "{{json .State}}",
+                    MINECRAFT_CONTAINER,
+                ),
+                timeout=15,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise HostActionError(
+                "minecraft_observation_failed",
+                "Podman inspect could not run",
+            ) from error
+        if result.returncode != 0:
+            raise HostActionError(
+                "minecraft_observation_failed",
+                self._podman_failure("inspect", result),
+            )
         try:
             value = json.loads(result.stdout)
         except json.JSONDecodeError as error:
@@ -576,6 +608,12 @@ class HostRuntime:
             "health": str(health or "unknown"),
             "paused": value.get("Paused") is True,
         }
+
+    @staticmethod
+    def _podman_failure(action: str, result: CompletedCommand) -> str:
+        details = result.stderr.strip().splitlines()
+        message = details[-1] if details else "no diagnostic output"
+        return f"Podman {action} failed with exit {result.returncode}: {message[:300]}"
 
     def _minecraft_start_diagnostics(self) -> str:
         try:

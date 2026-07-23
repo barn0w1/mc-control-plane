@@ -169,9 +169,19 @@ class HostAgent:
                 "state": "failed",
                 "error_code": error.code,
                 "message": str(error)[:500],
-                "observation": self._runtime.inspect(),
+                "observation": self._failure_observation(),
             }
         self._journal.complete(command_id, result)
+
+    def _failure_observation(self) -> dict[str, object]:
+        try:
+            return self._runtime.inspect()
+        except HostActionError as error:
+            return {
+                "status": "unavailable",
+                "error_code": error.code,
+                "message": str(error)[:500],
+            }
 
     def _execute(
         self,
@@ -218,7 +228,7 @@ class HostAgent:
                 minecraft_version=cast(str, payload["minecraft_version"]),
                 paper_build=cast(str, payload["paper_build"]),
                 memory=cast(str, payload["memory"]),
-                eula=cast(bool, payload["eula"]),
+                eula=payload["eula"],
             )
         minecraft_actions = {
             "start_minecraft": self._runtime.start_minecraft,

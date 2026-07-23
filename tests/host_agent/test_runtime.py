@@ -32,6 +32,9 @@ class FakeRunner:
         self.existing_snapshot_id: str | None = None
         self.workload_identity_valid = True
         self.minecraft_start_returncode = 0
+        self.minecraft_start_health = "healthy"
+        self.podman_exists_returncode: int | None = None
+        self.podman_inspect_returncode = 0
 
     def run(
         self,
@@ -111,7 +114,7 @@ class FakeRunner:
                     )
                 self.minecraft_state = "active"
                 self.minecraft_container_status = "running"
-                self.minecraft_health = "healthy"
+                self.minecraft_health = self.minecraft_start_health
             else:
                 self.fixture_state = "active"
         if values[:2] == ("systemctl", "stop"):
@@ -122,11 +125,29 @@ class FakeRunner:
                 self.minecraft_paused = False
             else:
                 self.fixture_state = self.stop_state
+        if values == ("podman", "container", "exists", "mccp-minecraft"):
+            if self.podman_exists_returncode is not None:
+                return CompletedCommand(
+                    self.podman_exists_returncode,
+                    "",
+                    "configure storage: storage.lock: read-only file system",
+                )
+            return CompletedCommand(
+                1 if self.minecraft_container_status == "absent" else 0,
+                "",
+                "",
+            )
         if values[:4] == ("podman", "inspect", "--format", "{{.Config.User}}"):
             if self.minecraft_container_status == "absent":
                 return CompletedCommand(1, "", "no such container")
             return CompletedCommand(0, f"{os.getuid()}:{os.getgid()}\n", "")
         if values[:2] == ("podman", "inspect"):
+            if self.podman_inspect_returncode:
+                return CompletedCommand(
+                    self.podman_inspect_returncode,
+                    "",
+                    "inspect storage became unavailable",
+                )
             if self.minecraft_container_status == "absent":
                 return CompletedCommand(1, "", "no such container")
             return CompletedCommand(
@@ -308,6 +329,37 @@ def test_minecraft_apply_rejects_missing_workload_identity(tmp_path: Path) -> No
     assert not (tmp_path / "quadlets" / "mccp-minecraft.container").exists()
 
 
+def test_minecraft_observation_distinguishes_absence_from_podman_failure(
+    tmp_path: Path,
+) -> None:
+    runner = FakeRunner()
+    runtime = HostRuntime(IMAGE, runner=runner, run_id="run-1", data_root=tmp_path)
+
+    assert runtime.observe_minecraft()["minecraft"] == "stopped"
+
+    runner.podman_exists_returncode = 125
+    with pytest.raises(HostActionError) as captured:
+        runtime.observe_minecraft()
+
+    assert captured.value.code == "minecraft_observation_failed"
+    assert "exit 125" in str(captured.value)
+    assert "read-only file system" in str(captured.value)
+    assert runtime.service_states()["minecraft"] == "unknown"
+
+
+def test_minecraft_observation_reports_inspect_failure(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    runner.minecraft_container_status = "running"
+    runner.podman_inspect_returncode = 125
+    runtime = HostRuntime(IMAGE, runner=runner, run_id="run-1", data_root=tmp_path)
+
+    with pytest.raises(HostActionError) as captured:
+        runtime.observe_minecraft()
+
+    assert captured.value.code == "minecraft_observation_failed"
+    assert "Podman inspect failed with exit 125" in str(captured.value)
+
+
 def test_minecraft_lifecycle_and_live_snapshot_are_consistent(tmp_path: Path) -> None:
     runner = FakeRunner()
     runner.repository_exists = True
@@ -381,6 +433,37 @@ def test_minecraft_start_failure_includes_bounded_diagnostics(tmp_path: Path) ->
 
     assert captured.value.code == "minecraft_start_failed"
     assert "diagnostics=" in str(captured.value)
+    assert f"configured_user={os.getuid()}:{os.getgid()}" in str(captured.value)
+    assert "processes=USER PID COMMAND" in str(captured.value)
+    assert "useful startup detail" in str(captured.value)
+
+
+def test_minecraft_not_ready_includes_bounded_diagnostics(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    runner.minecraft_start_health = "starting"
+    runtime = HostRuntime(
+        IMAGE,
+        runner=runner,
+        quadlet_directory=tmp_path / "quadlets",
+        generator=Path("/generator"),
+        run_id="run-1",
+        data_root=tmp_path / "data",
+        workload_uid=os.getuid(),
+        workload_gid=os.getgid(),
+    )
+    runtime.apply_minecraft(
+        image=MINECRAFT_IMAGE,
+        minecraft_version="1.21.8",
+        paper_build="42",
+        memory="512M",
+        eula=True,
+    )
+
+    with pytest.raises(HostActionError) as captured:
+        runtime.start_minecraft()
+
+    assert captured.value.code == "minecraft_not_ready"
+    assert "Minecraft state is starting" in str(captured.value)
     assert f"configured_user={os.getuid()}:{os.getgid()}" in str(captured.value)
     assert "processes=USER PID COMMAND" in str(captured.value)
     assert "useful startup detail" in str(captured.value)

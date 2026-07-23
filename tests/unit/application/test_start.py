@@ -97,7 +97,7 @@ def test_start_workflow_creates_once_and_advances_to_host_boundary(
         run_id=accepted.run_id,
         agent_id=f"agent-{accepted.run_id}",
         protocol_version=1,
-        agent_version="0.3.2",
+        agent_version="0.3.3",
         status="connected",
         boot_id="boot-1",
         capabilities={

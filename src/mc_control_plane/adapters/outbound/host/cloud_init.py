@@ -75,6 +75,7 @@ def render_host_cloud_init(spec: HostBootstrapSpec) -> str:
         json.dumps(config, separators=(",", ":"), sort_keys=True).encode()
     ).decode()
     service = _service_unit()
+    tmpfiles = _podman_tmpfiles()
     bootstrap = _bootstrap_script(spec)
     # JSON strings are valid YAML scalar values and avoid hand-written escaping.
     return (
@@ -99,6 +100,11 @@ def render_host_cloud_init(spec: HostBootstrapSpec) -> str:
         "    permissions: '0644'\n"
         "    content: |\n"
         f"{_indent(service, 6)}"
+        "  - path: /etc/tmpfiles.d/mccp-podman-runtime.conf\n"
+        "    owner: root:root\n"
+        "    permissions: '0644'\n"
+        "    content: |\n"
+        f"{_indent(tmpfiles, 6)}"
         "  - path: /usr/local/sbin/mccp-bootstrap\n"
         "    owner: root:root\n"
         "    permissions: '0700'\n"
@@ -119,6 +125,10 @@ set -eu
 umask 077
 install -d -m 0700 /var/lib/mc-control-plane-agent
 install -d -m 0700 /var/lib/mc-control-plane-data
+install -d -m 0700 /var/lib/containers
+install -d -m 0700 /run/containers
+install -d -m 0700 /run/libpod
+install -d -m 0700 /run/crun
 install -d -m 0755 /etc/containers/systemd
 workload_user=mccp-minecraft
 workload_uid=1000
@@ -187,11 +197,20 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
-ReadWritePaths=/etc/mc-control-plane-agent /etc/containers/systemd /var/lib/mc-control-plane-agent /var/lib/mc-control-plane-data
+ReadWritePaths=/etc/mc-control-plane-agent /etc/containers/systemd
+ReadWritePaths=/var/lib/mc-control-plane-agent /var/lib/mc-control-plane-data
+ReadWritePaths=/var/lib/containers /run/containers /run/libpod /run/crun
 UMask=0077
 
 [Install]
 WantedBy=multi-user.target
+"""
+
+
+def _podman_tmpfiles() -> str:
+    return """d /run/containers 0700 root root -
+d /run/libpod 0700 root root -
+d /run/crun 0700 root root -
 """
 
 
