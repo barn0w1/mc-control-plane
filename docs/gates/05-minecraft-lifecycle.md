@@ -2,13 +2,19 @@
 
 ## Status
 
-**Implementation complete / live acceptance pending**（2026-07-23）。自動testでは、Paper Quadletの
+**Implementation revised / live acceptance pending**（2026-07-23）。自動testでは、Paper Quadletの
 生成前検証、固定version、health-based readiness、graceful stop、実行中snapshotのquiesce/resume、
 中断後のpause復旧、Host command再配送、snapshot種別を確認している。実accountでの2台のfresh
 Linodeを使うcheckが成功し、project ownerが結果を確認した時点でCompleteとする。
 
 Gate 5はMinecraftの基礎的なworkload lifecycleを、Gate 1から4で完成したInfra、Host、Dataの上へ
 載せる。Minecraft設定、plugin、定期snapshot、retentionは扱わない。
+
+最初のlive試行では、空の`/data`に対するitzgのUID 1000 ownership変更から起動が進まなかった。
+agent 0.3.1ではcloud-initが非loginの`mccp-minecraft`（UID/GID 2000）を作成し、Minecraft processと
+dataだけをこのidentityへ統一する。Host agent、restic、rootful Podmanはsystem管理に必要なroot権限を
+維持する。Quadlet適用前にaccountとdata treeを検証し、itzgの起動時chownを明示的に無効化する。
+containerは非privilegedのままで、Run専用`/data`以外のHost pathやPodman socketをmountしない。
 
 ## 合格する一連の処理
 
@@ -77,14 +83,14 @@ Gate実行時に自動追従させない。
 
 ### 4. CaddyとHost API
 
-Caddyが公開するagent artifactを0.3.0へ更新する。
+Caddyが公開するagent artifactを0.3.1へ更新する。
 
 ```caddyfile
 mc-control-plane.hss-science.org {
 	@allowed <<CEL
         (method('POST') && path('/v1/host/enroll', '/v1/host/poll'))
         ||
-        (method('GET') && path('/artifacts/mccp-host-agent-0.3.0.whl'))
+        (method('GET') && path('/artifacts/mccp-host-agent-0.3.1.whl'))
     CEL
 
 	handle @allowed {
@@ -106,7 +112,7 @@ nohup uv run mc-control-plane host-api-serve \
   --database ./control-plane.db \
   --bind 127.0.0.1 \
   --port 8443 \
-  --agent-wheel dist/host-agent/mccp_host_agent-0.3.0-py3-none-any.whl \
+  --agent-wheel dist/host-agent/mccp_host_agent-0.3.1-py3-none-any.whl \
   --r2-account-id YOUR_ACCOUNT_ID \
   --r2-bucket YOUR_BUCKET \
   --r2-parent-access-key-id YOUR_PARENT_ACCESS_KEY_ID \
@@ -148,7 +154,7 @@ uv run mc-control-plane linode-gate5-check \
   --server-unit-id gate5-minecraft-lifecycle \
   --host-bootstrap-key ./host-bootstrap.key \
   --control-plane-url https://mc-control-plane.hss-science.org \
-  --agent-wheel dist/host-agent/mccp_host_agent-0.3.0-py3-none-any.whl \
+  --agent-wheel dist/host-agent/mccp_host_agent-0.3.1-py3-none-any.whl \
   --fixture-image docker.io/library/alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b \
   --minecraft-image "$MINECRAFT_IMAGE" \
   --minecraft-version "$MINECRAFT_VERSION" \
@@ -163,6 +169,24 @@ uv run mc-control-plane linode-gate5-check \
 ```
 
 `--fixture-image`は既存のHost bootstrap schemaに必要だが、Gate 5はGate 2 fixture containerを起動しない。
+
+最初の失敗したRunを手動削除したDBを再利用する場合は、先に後述の`linode-gate3-cleanup`を実行して
+active Run/Operationを閉じる。最も単純な再検証は空のDBから上記Server Unitを作り直す方法である。
+
+`start_minecraft`はPaperのhealth到達まで数分かかり得る。command stateが変わらない間も60秒ごとに
+`elapsed=...s`を表示する。agent 0.3.1ではstart失敗時のsystemd/Podman状態とcontainer log末尾も
+command resultへ含めるため、長時間無出力を正常と決めつけない。
+
+必要な場合だけSSHで次を確認する。正常なbootstrapではaccountがlogin不能で、data rootが
+`2000:2000`になり、container logには`Running as uid=2000 gid=2000`が現れる。`Changing ownership of
+/data`で待ち続けるのは修正版では正常ではない。
+
+```bash
+getent passwd mccp-minecraft
+getent group mccp-minecraft
+find /var/lib/mc-control-plane-data -type d -name data -exec stat -c '%u:%g %a %n' {} \;
+podman logs --tail 50 mccp-minecraft
+```
 
 成功行には次が含まれる。
 

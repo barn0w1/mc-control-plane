@@ -213,6 +213,8 @@ Discord adapterはstart/stop workflowが安定した後に追加します。
 - Execution HostはDebian 13とし、systemd / Podman Quadletを使用する。
 - 通常のHost制御にはoutbound polling agentを使い、SSHはbreak-glass専用とする。
 - Host agentはDebian 13標準Python 3.13をsupportする独立packageとして配布する。
+- Host agentとrootful Podmanはrootで管理し、Minecraft process/dataは固定された非login UID/GIDへ
+  分離する。
 - Control PlaneのHost APIはHTTPSで固定schemaのversioned protocolだけを公開する。
 - Host commandはat-least-onceで配送し、agentのlocal journalで実行を冪等にする。
 - test用Akamai Cloud resourceには完全なownership identityを付け、自動cleanupする。

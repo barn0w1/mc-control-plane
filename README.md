@@ -57,6 +57,7 @@ flowchart TD
 - [ADR-0012: data credentialを永続HostCommandから分離する](docs/decisions/0012-deliver-ephemeral-data-leases.md)
 - [ADR-0013: restic repositoryを空passwordで運用する](docs/decisions/0013-use-passwordless-restic-repositories.md)
 - [ADR-0014: Paper Quadletを固定しhealthでreadinessを判定する](docs/decisions/0014-pin-and-health-gate-paper-quadlet.md)
+- [ADR-0015: Minecraft workloadへ固定された専用identityを使用する](docs/decisions/0015-use-dedicated-minecraft-identity.md)
 
 ## 現在の段階
 
@@ -72,7 +73,9 @@ live acceptanceまで完了しています。Gate 4もR2 temporary credential、
 live acceptanceまで完了しています。実地検証で見つかったR2権限preflight、SQLite writer競合、
 command delivery、snapshot検証時刻の意味も修正済みです。Gate 5は固定Paper Quadlet、health-based
 readiness、graceful stop、安全な手動snapshot、2台のfresh Hostによるrestore/restart harnessまで
-実装し、自動testを通過しています。実account live acceptanceは未実施です。
+実装し、自動testを通過しています。最初のlive試行で見つかったdata ownership停止点に対して、
+agent 0.3.1では専用の非login identityと起動前検証へ改めています。修正版の実account live
+acceptanceは未実施です。
 中期的には、Infra lifecycleとDebian 13 Host foundationをMinecraftより先に完成させ、
 その上で一つのServer Unitのstart、snapshot、stop、再restoreを一周させます。
 後方互換性はまだ要求せず、実装から得た知見に基づく破壊的変更を許容します。

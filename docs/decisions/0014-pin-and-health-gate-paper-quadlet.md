@@ -15,6 +15,8 @@ stop timeoutによる強制終了を防げない。
 - container imageはSHA-256 digest、Minecraftは完全version、Paperは正の整数buildで固定する。
 - `TYPE=PAPER`を使い、EULA同意はlive CLIの明示flagでだけ受け付ける。
 - root disk上のRun専用data directoryを`/data`へbind mountする。
+- [ADR-0015](0015-use-dedicated-minecraft-identity.md)に従い、Minecraft processとdataを固定された
+  非login UID/GIDへ揃え、起動前に検証してから起動時chownを無効にする。
 - Quadletの`HealthCmd=mc-health`と`Notify=healthy`を使い、systemd active、container running、
   health healthy、not pausedを同時に満たした状態だけを`ready`とする。
 - `STOP_DURATION=120`、Quadlet `StopTimeout=180`、systemd `TimeoutStopSec=240`の順に長くし、
