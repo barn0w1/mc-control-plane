@@ -15,13 +15,16 @@ stop timeoutによる強制終了を防げない。
 - container imageはSHA-256 digest、Minecraftは完全version、Paperは正の整数buildで固定する。
 - `TYPE=PAPER`を使い、EULA同意はlive CLIの明示flagでだけ受け付ける。
 - root disk上のRun専用data directoryを`/data`へbind mountする。
-- [ADR-0015](0015-use-dedicated-minecraft-identity.md)に従い、Minecraft processとdataを固定された
-  非login UID/GIDへ揃え、起動前に検証してから起動時chownを無効にする。
+- [ADR-0015](0015-use-dedicated-minecraft-identity.md)に従い、Minecraft processとdataをimage既定の
+  固定non-login UID/GIDへ揃える。Quadletの`User`/`Group`で最初から非rootとして起動し、
+  entrypointのUID/GID変更、`gosu`、起動時chownを経由しない。
 - Quadletの`HealthCmd=mc-health`と`Notify=healthy`を使い、systemd active、container running、
   health healthy、not pausedを同時に満たした状態だけを`ready`とする。
 - `STOP_DURATION=120`、Quadlet `StopTimeout=180`、systemd `TimeoutStopSec=240`の順に長くし、
   Minecraft wrapper、Podman、systemdの各層に正常終了の猶予を与える。
 - image pullは`Pull=missing`とし、digestがlocalにない場合だけ取得する。Run中の自動更新は行わない。
+- container capabilityをすべてdropし、`NoNewPrivileges=true`を維持する。MinecraftへHost管理権限を
+  渡さない。
 - Quadletはboot時にenableせず、restore確認後にHost commandから明示起動する。
 
 実行中の手動snapshotでは、RCONでsaveを止めてflushし、containerをpauseしている間だけresticを実行する。
