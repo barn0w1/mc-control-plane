@@ -219,7 +219,8 @@ Discord adapterはstart/stop workflowが安定した後に追加します。
 次は決定済みです。
 
 - SQLiteとversion付きmigrationを使用する。
-- 同期application coreと、永続Operationを一stepずつ進める単一reconcilerを使用する。
+- application use caseは短く同期的にintentをcommitし、長時間処理は独立常駐processの永続Operationが
+  一stepずつ非同期に進める。
 - task queue、message broker、複数writerは使用しない。
 - Execution HostはDebian 13とし、systemd / Podman Quadletを使用する。
 - 通常のHost制御にはoutbound polling agentを使い、SSHはbreak-glass専用とする。
@@ -230,9 +231,7 @@ Discord adapterはstart/stop workflowが安定した後に追加します。
 - Host commandはat-least-onceで配送し、agentのlocal journalで実行を冪等にする。
 - test用Akamai Cloud resourceには完全なownership identityを付け、自動cleanupする。
 
-次は必要になる直前に短いADRとして決めます。
-
-- configuration file schemaとControl Plane secret storeの配置
+single-node TOML config、secret file配置、systemd service構成はADR-0017で決定済みです。
 
 一方、Discord framework、複数worker、汎用plugin system、複数cloud対応は現時点では決めません。
 
@@ -250,6 +249,6 @@ Discord adapterはstart/stop workflowが安定した後に追加します。
 quiesced snapshot、graceful stop、停止後snapshot、内容一致restore、restart、cleanupを確認した。
 
 Gate harness内で検証した処理は、通常運用の永続Start、Stop、Snapshot Operation、snapshot一覧、
-個別CLIへ接続済みである。次の境界は通常CLIによる実account acceptanceと、Control Plane process群の
-system service packagingである。中期目標全体の完成条件は[Operational MVP](operational-mvp.md)を
-正本とする。
+個別CLI、strict node config、systemd管理の独立Host API/reconcilerへ接続済みである。次の境界は
+通常CLIによる実account acceptanceである。中期目標全体の完成条件は
+[Operational MVP](operational-mvp.md)を正本とする。

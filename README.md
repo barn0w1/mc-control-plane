@@ -26,6 +26,7 @@ flowchart TD
 - Paper、plugin、Minecraft設定の内容は管理しない。Server Unitに関連する不透明なpayloadとして保存・復元する。
 - 同じServer Unitを同時に複数のLinodeで起動しない。
 - CLIを最初の操作インターフェイスとし、Discord Botなどは後から同じapplication use caseへ接続する。
+- CLIは長時間処理を所有せず、systemd管理のHost APIとreconcilerが独立して常駐する。
 - 進行中Operationを中断・暗黙queueせず、競合要求には現在のOperationを返す。
 - Execution HostはDebian 13とし、container lifecycleをsystemd / Podman Quadletで管理する。
 - 通常のHost制御にはoutbound polling agentを使い、SSHは手動調査専用とする。
@@ -50,7 +51,8 @@ Debian 13 Host、永続start、R2/restic、Paper start、quiesced manual snapsho
 
 検証済みprimitiveを通常の永続Start、Snapshot、Stop OperationとCLIへ接続し、競合拒否、
 明示Operation retry、最新snapshot選択、snapshot-before-deleteを自動scenario testで固定しました。
-通常CLIによる実accountの一周は次のlive acceptance checkpointです。
+通常運用向けのstrict config、systemd service、短縮CLIを追加した。通常CLIによる実accountの一周は
+次のlive acceptance checkpointです。
 
 後方互換性はまだ要求せず、実装と実環境検証から得た知見に基づく破壊的変更を許容します。
 

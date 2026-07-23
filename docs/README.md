@@ -6,8 +6,9 @@
 これにより、Linode作成、Debian 13 Host bootstrap、永続start、R2/restic data lifecycle、
 Paperのstart・手動snapshot・stop・fresh Host restore/restartという技術的な一周を確認した。
 
-通常運用向けの永続Start/Stop/Snapshot Operationと個別CLIへの接続、自動scenario testまで完了した。
-通常CLIによる実accountの一周は未検証なので、Gate完了とOperational MVPの実環境Completeは区別する。
+通常運用向けの永続Start/Stop/Snapshot Operation、strict config、独立systemd service、短縮CLI、
+自動scenario testまで完了した。通常CLIによる実accountの一周は未検証なので、Gate完了と
+Operational MVPの実環境Completeは区別する。
 
 ## 正本
 
@@ -60,6 +61,7 @@ Gate文書は通常利用者向け操作説明ではなく、課金を伴うacce
 - [ADR-0014: Paper Quadletを固定しhealthで判定する](decisions/0014-pin-and-health-gate-paper-quadlet.md)
 - [ADR-0015: Minecraft専用identityを使用する](decisions/0015-use-dedicated-minecraft-identity.md)
 - [ADR-0016: 操作interfaceを共有use caseへ接続し、Operationを直列化する](decisions/0016-serialize-application-operations.md)
+- [ADR-0017: 通常運用を独立した単一ノードserviceで実行する](decisions/0017-run-private-single-node-services.md)
 
 ## 更新規則
 

@@ -113,7 +113,7 @@ mc-control-plane.hss-science.org {
 	@allowed <<CEL
         (method('POST') && path('/v1/host/enroll', '/v1/host/poll'))
         ||
-        (method('GET') && path('/artifacts/mccp-host-agent-0.3.4.whl'))
+        (method('GET') && path('/artifacts/host-agent.whl'))
     CEL
 
 	handle @allowed {
