@@ -1,18 +1,26 @@
-# Python-generated files
-__pycache__/
-*.py[cod]
-build/
-dist/
-wheels/
-*.egg-info
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+# Rust
+/target/
+**/*.rs.bk
 
-# Virtual environments
-.venv/
-
-# Local Control Plane data
+# Runtime state
 *.db
 *.db-shm
 *.db-wal
+*.pid
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+
+# Editor and operating system files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo

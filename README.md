@@ -1,86 +1,54 @@
 # mc-control-plane
 
-小規模なコミュニティ向けMinecraftマルチプレイサーバーのライフサイクルを自動化するControl Planeです。
+Minecraft server automationのためのControl Planeを、Rustで新しく設計・実装するprojectです。
 
-常時稼働するControl Planeから、必要なときだけAkamai Cloud上にLinodeを作成します。
-Cloudflare R2に保存したServer Unitを復元してPaperMCを実行し、停止時には
-restic snapshotをR2へ保存してからLinodeを削除します。
+現在は実装開始前のfoundation設計段階です。既存のPython実装を互換対象として移植するのではなく、
+実装と実環境検証から得られた知見を参考にしながら、概念、責務、protocol、failure modelを整理し直します。
+
+## 目標とする構成
 
 ```mermaid
-flowchart TD
-    User["CLI / 将来のDiscord Bot"] --> Control["Python Control Plane"]
-    Control --> Akamai["Akamai Cloud<br/>Linode"]
-    Control --> R2["Cloudflare R2<br/>restic repository"]
-    Akamai --> Host["Debian 13<br/>cloud-init"]
-    Host --> Agent["Host agent<br/>outbound HTTPS"]
-    Agent --> Control
-    Agent --> Runtime["systemd / Podman Quadlet<br/>itzg/minecraft-server"]
-    Agent <--> R2
+flowchart LR
+    CLI["mccpctl"] -->|"RPC"| CP["mccpd"]
+    Other["future interfaces"] -->|"RPC"| CP
+    Hostd["mccp-hostd"] -->|"outbound RPC / mTLS"| CP
+    CP --> Linode["Akamai Cloud / Linode"]
+    Hostd --> Host["Host resources and workloads"]
 ```
 
-## 確定している方針
+- `mccpd`: state、controller、provider integration、identityを所有する単一のRust daemon
+- `mccp-hostd`: 各Hostに常駐し、Hostを観測・制御するRust daemon
+- `mccpctl`: `mccpd`だけを操作するRPC client
+- 将来のDiscord BotやWeb interfaceも、同じRPC APIを利用するclient
 
-- 稼働中の最新データはroot diskにあり、確定済みの永続的な復旧点はR2上のrestic snapshotとする。
-- 実行用データにはLinodeのroot diskを使い、Block Storage Volumeは使わない。
-- Control Planeが自動作成・削除するAkamai CloudリソースはLinodeだけとする。
-- Paper、plugin、Minecraft設定の内容は管理しない。Server Unitに関連する不透明なpayloadとして保存・復元する。
-- 同じServer Unitを同時に複数のLinodeで起動しない。
-- CLIを最初の操作インターフェイスとし、Discord Botなどは後から同じapplication use caseへ接続する。
-- CLIは長時間処理を所有せず、systemd管理のHost APIとreconcilerが独立して常駐する。
-- 進行中Operationを中断・暗黙queueせず、競合要求には現在のOperationを返す。
-- Execution HostはDebian 13とし、container lifecycleをsystemd / Podman Quadletで管理する。
-- 通常のHost制御にはoutbound polling agentを使い、SSHは手動調査専用とする。
-- Execution HostはLinode Interfacesだけを使い、一時root diskのlocal disk encryptionを無効にする。
-- restic repositoryは空passwordで運用し、R2 credential以外の復元secretを持たない。
-- 商用サービス級の高可用性は目標にしない。明示snapshotと単純で回復可能な処理を優先する。
+## 現在のcheckpoint
 
-## ドキュメント
+中期checkpointは、Minecraft workloadを載せる前に、Hostを一つの独立したresource layerとして
+完全に管理できる状態を作ることです。
 
-- [Documentation index](docs/README.md)
-- [Architecture](docs/architecture.md)
-- [中期目標: Operational MVP](docs/operational-mvp.md)
-- [Project structure](docs/project-structure.md)
-- [State machines](docs/state-machines.md)
-- [通常運用CLI](docs/normal-operations.md)
+- 上位layerが`HostClaim`を提示できる
+- Host subsystemが必要なHostを確保する
+- `mccp-hostd`が安全にenrollし、mTLSで`mccpd`と通信する
+- Hostのidentity、provider resource、allocation、observed stateを一貫して管理する
+- Claim解放後にHostをidleで保持し、policyに従って再利用または削除する
+- process restartや通信断から安全に再開する
+- 通常操作にSSHやprovider consoleを必要としない
 
-## 現在の段階
+詳細は[Host control checkpoint](docs/plans/checkpoint-host-control.md)を参照してください。
 
-Gate 1から5までの実装、自動test、実account live acceptanceが完了しています。Linode ownership、
-Debian 13 Host、永続start、R2/restic、Paper start、quiesced manual snapshot、graceful stop、
-停止後snapshot、fresh Host restore/restart、最終cleanupを順に実証しました。
+## Documentation
 
-検証済みprimitiveを通常の永続Start、Snapshot、Stop OperationとCLIへ接続し、競合拒否、
-明示Operation retry、最新snapshot選択、snapshot-before-deleteを自動scenario testで固定しました。
-通常運用向けのstrict config、systemd service、短縮CLIを追加した。通常CLIによる実accountの一周は
-次のlive acceptance checkpointです。
+設計文書の入口は[docs/README.md](docs/README.md)です。
 
-後方互換性はまだ要求せず、実装と実環境検証から得た知見に基づく破壊的変更を許容します。
+## Python prototype
 
-## Development
+以前のPython実装は作業ツリーから削除しました。履歴はGitに残っており、
+`python-prototype-reference-2026-07-23` tagから参照できます。
 
-```bash
-uv sync
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src host_agent/src
-uv run pytest
-uv build
-uv build --project host_agent --out-dir dist/host-agent
-```
+旧実装は互換対象ではありません。引き継ぐ知見は
+[Python prototypeから得た知見](docs/history/python-prototype.md)に整理しています。
 
-SQLite databaseを初期化するには次を実行します。
+## Development status
 
-```bash
-uv run mc-control-plane init-db ./control-plane.db
-```
-
-課金を伴うGate 1の実account検証は、通常の開発testから分離しています。実行前に
-[Gate 1 acceptance](docs/gates/01-infra-lifecycle.md)を確認してください。
-Debian HostとQuadletを検証するGate 2は[Gate 2 acceptance](docs/gates/02-host-foundation.md)を
-確認してください。
-永続workflowとprocess再開を検証するGate 3は
-[Gate 3 acceptance](docs/gates/03-durable-orchestration.md)を確認してください。
-restic/R2とfresh Host restoreを検証するGate 4は
-[Gate 4 acceptance](docs/gates/04-data-lifecycle.md)を確認してください。
-Paperのstart、snapshot、stop、fresh Host restore/restartを検証するGate 5は
-[Gate 5 acceptance](docs/gates/05-minecraft-lifecycle.md)を確認してください。
+現在のbranchにはRust実装をまだ追加していません。次の段階でCargo workspaceと最小のdaemon/clientを作成します。
+Rust toolchainの選定、build、format、lint、testの実行結果は実装開始後に文書化します。

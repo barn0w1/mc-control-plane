@@ -1,1 +1,0 @@
-"""Read-only application queries."""
