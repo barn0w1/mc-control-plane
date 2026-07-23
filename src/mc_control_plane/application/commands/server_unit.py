@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from mc_control_plane.application.ports.persistence import UnitOfWorkFactory
 from mc_control_plane.application.ports.support import Clock
 from mc_control_plane.domain.errors import PersistenceConflict
-from mc_control_plane.domain.models import RuntimeSpec, ServerUnit
+from mc_control_plane.domain.models import MinecraftSpec, RuntimeSpec, ServerUnit
 from mc_control_plane.domain.states import DesiredState
 
 
@@ -14,6 +14,7 @@ class CreateServerUnit:
     server_unit_id: str
     name: str
     runtime_spec: RuntimeSpec
+    minecraft_spec: MinecraftSpec | None = None
 
 
 class RequestServerUnitCreation:
@@ -30,6 +31,7 @@ class RequestServerUnitCreation:
             runtime_spec=command.runtime_spec,
             created_at=now,
             updated_at=now,
+            minecraft_spec=command.minecraft_spec,
         )
         try:
             with self._unit_of_work() as work:

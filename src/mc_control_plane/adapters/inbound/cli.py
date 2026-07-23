@@ -49,6 +49,11 @@ from mc_control_plane.adapters.outbound.storage import (
     R2ResticSettings,
     load_secret_file,
 )
+from mc_control_plane.application.commands.lifecycle import (
+    RequestOperationRetry,
+    RequestSnapshot,
+    RequestStop,
+)
 from mc_control_plane.application.commands.server_unit import (
     CreateServerUnit,
     RequestServerUnitCreation,
@@ -66,12 +71,15 @@ from mc_control_plane.application.ports.compute import ComputeProviderError
 from mc_control_plane.application.ports.persistence import (
     UnitOfWorkFactory as UnitOfWorkFactoryPort,
 )
+from mc_control_plane.application.queries.snapshots import ListServerUnitSnapshots
 from mc_control_plane.application.queries.status import GetServerUnitStatus
 from mc_control_plane.application.reconciler import OperationReconciler
 from mc_control_plane.application.support import SystemClock, UuidGenerator
+from mc_control_plane.application.workflows.snapshot import SnapshotWorkflow
 from mc_control_plane.application.workflows.start import StartWorkflow
+from mc_control_plane.application.workflows.stop import StopWorkflow
 from mc_control_plane.domain.errors import ControlPlaneError
-from mc_control_plane.domain.models import RuntimeSpec
+from mc_control_plane.domain.models import MinecraftSpec, RuntimeSpec
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -92,14 +100,45 @@ def _parser() -> argparse.ArgumentParser:
     unit_create.add_argument("--id", required=True)
     unit_create.add_argument("--name", required=True)
     _add_runtime_spec_arguments(unit_create)
+    _add_minecraft_spec_arguments(unit_create)
 
     unit_start = commands.add_parser("server-unit-start", help="request a durable start")
     unit_start.add_argument("--database", required=True, type=Path)
     unit_start.add_argument("--server-unit-id", required=True)
+    unit_start.add_argument(
+        "--source-snapshot-id",
+        help="restore this owned snapshot instead of selecting the latest snapshot",
+    )
+
+    unit_snapshot = commands.add_parser(
+        "server-unit-snapshot", help="request a durable live Minecraft snapshot"
+    )
+    unit_snapshot.add_argument("--database", required=True, type=Path)
+    unit_snapshot.add_argument("--server-unit-id", required=True)
+
+    unit_stop = commands.add_parser(
+        "server-unit-stop",
+        help="request graceful stop, snapshot, and runtime deletion",
+    )
+    unit_stop.add_argument("--database", required=True, type=Path)
+    unit_stop.add_argument("--server-unit-id", required=True)
 
     unit_status = commands.add_parser("server-unit-status", help="show layered status as JSON")
     unit_status.add_argument("--database", required=True, type=Path)
     unit_status.add_argument("--server-unit-id", required=True)
+
+    unit_snapshots = commands.add_parser(
+        "server-unit-snapshots", help="list committed snapshots as JSON"
+    )
+    unit_snapshots.add_argument("--database", required=True, type=Path)
+    unit_snapshots.add_argument("--server-unit-id", required=True)
+
+    operation_retry = commands.add_parser(
+        "operation-retry",
+        help="resume one blocked Operation after correcting its cause",
+    )
+    operation_retry.add_argument("--database", required=True, type=Path)
+    operation_retry.add_argument("--operation-id", required=True)
 
     reconciler = commands.add_parser(
         "reconciler-run",
@@ -251,6 +290,14 @@ def _add_runtime_spec_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--image", default=DEBIAN_13_IMAGE)
 
 
+def _add_minecraft_spec_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--minecraft-image")
+    parser.add_argument("--minecraft-version")
+    parser.add_argument("--paper-build")
+    parser.add_argument("--minecraft-memory", default="512M")
+    parser.add_argument("--accept-minecraft-eula", action="store_true")
+
+
 def _add_ssh_key_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--ssh-public-key",
@@ -267,6 +314,27 @@ def _runtime_spec(arguments: argparse.Namespace) -> RuntimeSpec:
         instance_type=arguments.instance_type,
         image=arguments.image,
         firewall_id=arguments.firewall_id,
+    )
+
+
+def _minecraft_spec(arguments: argparse.Namespace) -> MinecraftSpec | None:
+    values = (
+        arguments.minecraft_image,
+        arguments.minecraft_version,
+        arguments.paper_build,
+    )
+    if not any(value is not None for value in values):
+        if arguments.accept_minecraft_eula:
+            raise ValueError("Minecraft EULA acceptance requires a complete Minecraft spec")
+        return None
+    if not all(value is not None for value in values):
+        raise ValueError("Minecraft image, version, and Paper build must be provided together")
+    return MinecraftSpec(
+        image=arguments.minecraft_image,
+        minecraft_version=arguments.minecraft_version,
+        paper_build=arguments.paper_build,
+        memory=arguments.minecraft_memory,
+        eula_accepted=arguments.accept_minecraft_eula,
     )
 
 
@@ -296,7 +364,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         print(f"created Host bootstrap key: {arguments.path}")
         return 0
-    if arguments.command in {"server-unit-create", "server-unit-start", "server-unit-status"}:
+    if arguments.command in {
+        "server-unit-create",
+        "server-unit-start",
+        "server-unit-snapshot",
+        "server-unit-stop",
+        "server-unit-status",
+        "server-unit-snapshots",
+        "operation-retry",
+    }:
         try:
             database = SQLiteDatabase(arguments.database)
             database.migrate()
@@ -304,15 +380,60 @@ def main(argv: Sequence[str] | None = None) -> int:
             clock = SystemClock()
             if arguments.command == "server-unit-create":
                 unit = RequestServerUnitCreation(unit_of_work, clock)(
-                    CreateServerUnit(arguments.id, arguments.name, _runtime_spec(arguments))
+                    CreateServerUnit(
+                        arguments.id,
+                        arguments.name,
+                        _runtime_spec(arguments),
+                        _minecraft_spec(arguments),
+                    )
                 )
                 print(f"Server Unit created: id={unit.id} desired-state={unit.desired_state}")
                 return 0
             if arguments.command == "server-unit-start":
                 accepted = RequestStart(unit_of_work, clock, UuidGenerator())(
-                    StartServerUnit(arguments.server_unit_id)
+                    StartServerUnit(
+                        arguments.server_unit_id,
+                        source_snapshot_id=arguments.source_snapshot_id,
+                        use_latest_snapshot=arguments.source_snapshot_id is None,
+                        require_minecraft_spec=True,
+                    )
                 )
                 print(f"Start accepted: operation={accepted.operation_id} run={accepted.run_id}")
+                return 0
+            if arguments.command == "server-unit-snapshot":
+                lifecycle_accepted = RequestSnapshot(unit_of_work, clock, UuidGenerator())(
+                    arguments.server_unit_id
+                )
+                print(
+                    f"Snapshot accepted: operation={lifecycle_accepted.operation_id} "
+                    f"run={lifecycle_accepted.run_id}"
+                )
+                return 0
+            if arguments.command == "server-unit-stop":
+                lifecycle_accepted = RequestStop(unit_of_work, clock, UuidGenerator())(
+                    arguments.server_unit_id
+                )
+                print(
+                    f"Stop accepted: operation={lifecycle_accepted.operation_id} "
+                    f"run={lifecycle_accepted.run_id}"
+                )
+                return 0
+            if arguments.command == "operation-retry":
+                operation = RequestOperationRetry(unit_of_work, clock)(arguments.operation_id)
+                print(
+                    f"Operation retry accepted: operation={operation.id} "
+                    f"kind={operation.kind.value} step={operation.step}"
+                )
+                return 0
+            if arguments.command == "server-unit-snapshots":
+                snapshots = ListServerUnitSnapshots(unit_of_work)(arguments.server_unit_id)
+                print(
+                    json.dumps(
+                        [snapshot.as_dict() for snapshot in snapshots],
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
                 return 0
             observations = StoredHostObservations(HostProtocolStore(database))
             status = GetServerUnitStatus(unit_of_work, observations, clock)(
@@ -692,6 +813,7 @@ def _run_reconciler(arguments: argparse.Namespace) -> int:
     store = HostProtocolStore(database)
     unit_of_work = cast(UnitOfWorkFactoryPort, SQLiteUnitOfWorkFactory(database))
     clock = SystemClock()
+    provider = _linode_provider(arguments)
     host = DurableHostManager(
         store,
         DurableHostSettings(
@@ -703,13 +825,26 @@ def _run_reconciler(arguments: argparse.Namespace) -> int:
     )
     workflow = StartWorkflow(
         unit_of_work,
-        _linode_provider(arguments),
+        provider,
         clock,
         system_id=arguments.system_id,
         host_bootstrap=host,
         host_observations=host,
+        host_commands=store,
     )
-    reconciler = OperationReconciler(unit_of_work, workflow, clock)
+    reconciler = OperationReconciler(
+        unit_of_work,
+        workflow,
+        clock,
+        SnapshotWorkflow(unit_of_work, store, clock),
+        StopWorkflow(
+            unit_of_work,
+            store,
+            provider,
+            clock,
+            system_id=arguments.system_id,
+        ),
+    )
     stopping = False
 
     def request_stop(_signal: int, _frame: object) -> None:
@@ -724,7 +859,7 @@ def _run_reconciler(arguments: argparse.Namespace) -> int:
             for result in cycle.results:
                 print(
                     f"Reconciled: operation={result.operation_id} "
-                    f"state={result.state.value} step={result.step.value} changed={result.changed}"
+                    f"state={result.state.value} step={result.step} changed={result.changed}"
                 )
             for failure in cycle.failures:
                 print(

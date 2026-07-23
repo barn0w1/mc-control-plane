@@ -1,5 +1,6 @@
 """Provider-independent domain entities and value objects."""
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
@@ -57,6 +58,42 @@ class RuntimeSpec:
             _require_text(self.firewall_id, "firewall_id")
 
 
+_DIGEST_IMAGE = re.compile(r"^[a-z0-9][a-z0-9._:/-]+@sha256:[0-9a-f]{64}$")
+_MINECRAFT_VERSION = re.compile(r"^[0-9]+\.[0-9]+(?:\.[0-9]+)?$")
+_PAPER_BUILD = re.compile(r"^[1-9][0-9]*$")
+_MEMORY = re.compile(r"^[1-9][0-9]*(?:M|G)$")
+
+
+@dataclass(frozen=True, slots=True)
+class MinecraftSpec:
+    image: str
+    minecraft_version: str
+    paper_build: str
+    memory: str
+    eula_accepted: bool
+
+    def __post_init__(self) -> None:
+        if not _DIGEST_IMAGE.fullmatch(self.image):
+            raise InvalidModel("Minecraft image must be pinned by SHA-256 digest")
+        if not _MINECRAFT_VERSION.fullmatch(self.minecraft_version):
+            raise InvalidModel("Minecraft version must be an exact numeric version")
+        if not _PAPER_BUILD.fullmatch(self.paper_build):
+            raise InvalidModel("Paper build must be a positive integer")
+        if not _MEMORY.fullmatch(self.memory):
+            raise InvalidModel("Minecraft memory must use an M or G suffix")
+        if not self.eula_accepted:
+            raise InvalidModel("Minecraft EULA acceptance is required")
+
+    def as_payload(self) -> dict[str, str | bool]:
+        return {
+            "image": self.image,
+            "minecraft_version": self.minecraft_version,
+            "paper_build": self.paper_build,
+            "memory": self.memory,
+            "eula": self.eula_accepted,
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class ResourceIdentity:
     system_id: str
@@ -86,6 +123,7 @@ class ServerUnit:
     runtime_spec: RuntimeSpec
     created_at: datetime
     updated_at: datetime
+    minecraft_spec: MinecraftSpec | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.id, "id")
@@ -102,6 +140,7 @@ class Run:
     source_snapshot_id: str | None
     started_at: datetime
     ended_at: datetime | None = None
+    minecraft_spec: MinecraftSpec | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.id, "id")

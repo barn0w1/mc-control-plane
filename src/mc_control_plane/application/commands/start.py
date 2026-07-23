@@ -6,9 +6,11 @@ from mc_control_plane.application.ports.persistence import UnitOfWorkFactory
 from mc_control_plane.application.ports.support import Clock, IdGenerator
 from mc_control_plane.domain.errors import (
     ActiveRunExists,
+    MinecraftSpecNotConfigured,
     OperationConflict,
     PersistenceConflict,
     ServerUnitNotFound,
+    SnapshotOwnershipMismatch,
 )
 from mc_control_plane.domain.models import Operation, Run
 from mc_control_plane.domain.states import (
@@ -23,6 +25,8 @@ from mc_control_plane.domain.states import (
 class StartServerUnit:
     server_unit_id: str
     source_snapshot_id: str | None = None
+    use_latest_snapshot: bool = False
+    require_minecraft_spec: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,17 +56,36 @@ class RequestStart:
                 server_unit = work.server_units.get(command.server_unit_id)
                 if server_unit is None:
                     raise ServerUnitNotFound(command.server_unit_id)
+                if command.require_minecraft_spec and server_unit.minecraft_spec is None:
+                    raise MinecraftSpecNotConfigured(server_unit.id)
+                active_operation = work.operations.get_active(server_unit.id)
+                if active_operation is not None:
+                    raise OperationConflict(
+                        server_unit.id,
+                        operation_id=active_operation.id,
+                        kind=active_operation.kind.value,
+                        state=active_operation.state.value,
+                        step=str(active_operation.step),
+                    )
                 if work.runs.get_active(server_unit.id) is not None:
                     raise ActiveRunExists(server_unit.id)
-                if work.operations.get_active(server_unit.id) is not None:
-                    raise OperationConflict(server_unit.id)
+
+                source_snapshot_id = command.source_snapshot_id
+                if source_snapshot_id is None and command.use_latest_snapshot:
+                    latest = work.snapshots.get_latest(server_unit.id)
+                    source_snapshot_id = None if latest is None else latest.id
+                elif source_snapshot_id is not None:
+                    snapshot = work.snapshots.get(source_snapshot_id)
+                    if snapshot is None or snapshot.server_unit_id != server_unit.id:
+                        raise SnapshotOwnershipMismatch(source_snapshot_id)
 
                 run = Run(
                     id=run_id,
                     server_unit_id=server_unit.id,
                     runtime_spec=server_unit.runtime_spec,
-                    source_snapshot_id=command.source_snapshot_id,
+                    source_snapshot_id=source_snapshot_id,
                     started_at=now,
+                    minecraft_spec=server_unit.minecraft_spec,
                 )
                 operation = Operation(
                     id=operation_id,

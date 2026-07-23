@@ -2,12 +2,14 @@
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import timedelta
 
 from mc_control_plane.application.host_protocol import (
     HOST_AGENT_VERSION,
     HOST_PROTOCOL_VERSION,
+    HostCommandKind,
+    HostCommandState,
 )
 from mc_control_plane.application.ports.compute import (
     ComputeActionUncertain,
@@ -23,11 +25,18 @@ from mc_control_plane.application.ports.compute import (
 from mc_control_plane.application.ports.host import (
     HostBootstrapError,
     HostBootstrapProvider,
+    HostCommandGateway,
     HostObservation,
     HostObservationProvider,
 )
 from mc_control_plane.application.ports.persistence import UnitOfWorkFactory
 from mc_control_plane.application.ports.support import Clock
+from mc_control_plane.application.workflows.common import (
+    ReconcileResult,
+    ensure_host_command,
+    failed_command_message,
+    successful_observation,
+)
 from mc_control_plane.domain.errors import (
     OperationNotFound,
     ResourceOwnershipMismatch,
@@ -43,14 +52,6 @@ from mc_control_plane.domain.models import (
 from mc_control_plane.domain.states import OperationKind, OperationState, StartStep
 
 
-@dataclass(frozen=True, slots=True)
-class ReconcileResult:
-    operation_id: str
-    state: OperationState
-    step: StartStep
-    changed: bool
-
-
 class StartWorkflow:
     def __init__(
         self,
@@ -60,6 +61,7 @@ class StartWorkflow:
         system_id: str,
         host_bootstrap: HostBootstrapProvider,
         host_observations: HostObservationProvider,
+        host_commands: HostCommandGateway | None = None,
         retry_delay: timedelta = timedelta(seconds=5),
         host_freshness: timedelta = timedelta(seconds=30),
     ) -> None:
@@ -69,6 +71,7 @@ class StartWorkflow:
         self._system_id = system_id
         self._host_bootstrap = host_bootstrap
         self._host_observations = host_observations
+        self._host_commands = host_commands
         self._retry_delay = retry_delay
         self._host_freshness = host_freshness
 
@@ -93,6 +96,20 @@ class StartWorkflow:
                 return self._wait_provider(operation, run)
             if step is StartStep.WAIT_HOST:
                 return self._wait_host(operation, run)
+            if step in {
+                StartStep.INIT_DATA_REPOSITORY,
+                StartStep.RESTORE_SNAPSHOT,
+                StartStep.APPLY_WORKLOAD,
+                StartStep.START_WORKLOAD,
+            }:
+                return self._queue_host_action(operation, run, step)
+            if step in {
+                StartStep.WAIT_DATA_REPOSITORY,
+                StartStep.WAIT_RESTORE,
+                StartStep.WAIT_APPLY,
+                StartStep.WAIT_WORKLOAD,
+            }:
+                return self._wait_host_action(operation, run, step)
         except ComputeProviderUnavailable as error:
             latest, _ = self._load(operation_id)
             return self._retry(latest, "compute_provider_unavailable", str(error))
@@ -207,17 +224,186 @@ class StartWorkflow:
         if readiness_error is not None:
             return self._block(operation, "host_capability_invalid", readiness_error)
 
-        completed = replace(
+        if run.minecraft_spec is None:
+            completed = replace(
+                operation,
+                state=OperationState.SUCCEEDED,
+                step=StartStep.COMPLETE,
+                next_attempt_at=None,
+                last_error_code=None,
+                last_error_message=None,
+                updated_at=self._clock.now(),
+            )
+            self._save_operation(completed)
+            return self._result(completed, changed=True)
+        if self._host_commands is None:
+            return self._block(
+                operation,
+                "host_command_gateway_unavailable",
+                "Minecraft start requires the durable Host command gateway",
+            )
+        next_step = (
+            StartStep.RESTORE_SNAPSHOT
+            if run.source_snapshot_id is not None
+            else StartStep.INIT_DATA_REPOSITORY
+        )
+        advanced = replace(
             operation,
-            state=OperationState.SUCCEEDED,
-            step=StartStep.COMPLETE,
+            state=OperationState.RUNNING,
+            step=next_step,
             next_attempt_at=None,
             last_error_code=None,
             last_error_message=None,
             updated_at=self._clock.now(),
         )
-        self._save_operation(completed)
-        return self._result(completed, changed=True)
+        self._save_operation(advanced)
+        return self._result(advanced, changed=True)
+
+    def _queue_host_action(
+        self, operation: Operation, run: Run, step: StartStep
+    ) -> ReconcileResult:
+        if self._host_commands is None or run.minecraft_spec is None:
+            return self._block(operation, "start_workload_not_configured", step.value)
+        if step is StartStep.INIT_DATA_REPOSITORY:
+            kind = HostCommandKind.INIT_DATA_REPOSITORY
+            payload: dict[str, object] = {"server_unit_id": run.server_unit_id}
+            wait_step = StartStep.WAIT_DATA_REPOSITORY
+        elif step is StartStep.RESTORE_SNAPSHOT:
+            if run.source_snapshot_id is None:
+                return self._block(operation, "source_snapshot_missing", run.id)
+            kind = HostCommandKind.RESTORE_DATA
+            payload = {
+                "server_unit_id": run.server_unit_id,
+                "snapshot_id": run.source_snapshot_id,
+            }
+            wait_step = StartStep.WAIT_RESTORE
+        elif step is StartStep.APPLY_WORKLOAD:
+            kind = HostCommandKind.APPLY_MINECRAFT
+            payload = {
+                "server_unit_id": run.server_unit_id,
+                **run.minecraft_spec.as_payload(),
+            }
+            wait_step = StartStep.WAIT_APPLY
+        else:
+            kind = HostCommandKind.START_MINECRAFT
+            payload = {"server_unit_id": run.server_unit_id}
+            wait_step = StartStep.WAIT_WORKLOAD
+        command = ensure_host_command(
+            self._host_commands,
+            self._clock,
+            operation,
+            run,
+            action_step=step.value,
+            kind=kind,
+            payload=payload,
+        )
+        if command is None:
+            return self._retry(operation, "host_not_connected", "waiting for Host agent")
+        advanced = replace(
+            operation,
+            state=OperationState.RUNNING,
+            step=wait_step,
+            next_attempt_at=None,
+            last_error_code=None,
+            last_error_message=None,
+            updated_at=self._clock.now(),
+        )
+        self._save_operation(advanced)
+        return self._result(advanced, changed=True)
+
+    def _wait_host_action(self, operation: Operation, run: Run, step: StartStep) -> ReconcileResult:
+        if self._host_commands is None:
+            return self._block(operation, "host_command_gateway_unavailable", step.value)
+        action = {
+            StartStep.WAIT_DATA_REPOSITORY: StartStep.INIT_DATA_REPOSITORY,
+            StartStep.WAIT_RESTORE: StartStep.RESTORE_SNAPSHOT,
+            StartStep.WAIT_APPLY: StartStep.APPLY_WORKLOAD,
+            StartStep.WAIT_WORKLOAD: StartStep.START_WORKLOAD,
+        }[step]
+        command = self._host_commands.get_command(
+            f"operation-{operation.id}-{action.value}-attempt-{operation.attempt_count}"
+        )
+        if command is None:
+            return self._retry(operation, "host_command_missing", action.value)
+        if command.state in {HostCommandState.PENDING, HostCommandState.DELIVERED}:
+            return self._retry(operation, "host_command_in_progress", command.state.value)
+        if command.state is HostCommandState.FAILED:
+            return self._block(operation, "host_command_failed", failed_command_message(command))
+        observation = successful_observation(command)
+        if observation is None:
+            return self._block(
+                operation, "host_command_result_invalid", f"{action.value} omitted observation"
+            )
+        if step is StartStep.WAIT_WORKLOAD:
+            if observation.get("minecraft") != "ready":
+                return self._block(
+                    operation,
+                    "minecraft_not_ready",
+                    str(observation.get("minecraft")),
+                )
+            next_step = StartStep.COMPLETE
+        elif step is StartStep.WAIT_APPLY:
+            if observation.get("minecraft") != "stopped":
+                return self._block(
+                    operation,
+                    "minecraft_apply_invalid",
+                    str(observation.get("minecraft")),
+                )
+            next_step = StartStep.START_WORKLOAD
+        else:
+            if step is StartStep.WAIT_DATA_REPOSITORY and observation.get("repository") != "ready":
+                return self._block(
+                    operation,
+                    "data_repository_not_ready",
+                    str(observation.get("repository")),
+                )
+            if step is StartStep.WAIT_RESTORE:
+                if observation.get("snapshot_id") != run.source_snapshot_id:
+                    return self._block(
+                        operation,
+                        "restore_snapshot_mismatch",
+                        str(observation.get("snapshot_id")),
+                    )
+                with self._unit_of_work() as work:
+                    snapshot = (
+                        None
+                        if run.source_snapshot_id is None
+                        else work.snapshots.get(run.source_snapshot_id)
+                    )
+                if snapshot is None or snapshot.server_unit_id != run.server_unit_id:
+                    return self._block(
+                        operation,
+                        "snapshot_ownership_mismatch",
+                        run.source_snapshot_id or "none",
+                    )
+                with self._unit_of_work() as work:
+                    if snapshot.verified_at is None:
+                        work.snapshots.save(replace(snapshot, verified_at=self._clock.now()))
+                    work.commit()
+            next_step = StartStep.APPLY_WORKLOAD
+        if next_step is StartStep.COMPLETE:
+            completed = replace(
+                operation,
+                state=OperationState.SUCCEEDED,
+                step=StartStep.COMPLETE,
+                next_attempt_at=None,
+                last_error_code=None,
+                last_error_message=None,
+                updated_at=self._clock.now(),
+            )
+            self._save_operation(completed)
+            return self._result(completed, changed=True)
+        advanced = replace(
+            operation,
+            state=OperationState.RUNNING,
+            step=next_step,
+            next_attempt_at=None,
+            last_error_code=None,
+            last_error_message=None,
+            updated_at=self._clock.now(),
+        )
+        self._save_operation(advanced)
+        return self._result(advanced, changed=True)
 
     def _wait_provider(self, operation: Operation, run: Run) -> ReconcileResult:
         with self._unit_of_work() as work:

@@ -262,7 +262,7 @@ def _start_host(
         for result in cycle.results:
             report(
                 f"reconcile: operation={result.operation_id} state={result.state.value} "
-                f"step={result.step.value}"
+                f"step={result.step}"
             )
         with unit_of_work() as work:
             operation = work.operations.get(accepted.operation_id)

@@ -208,6 +208,14 @@ def test_server_unit_create_start_and_status_cli(tmp_path: Path, capsys) -> None
             "g6-nanode-1",
             "--firewall-id",
             "79203454",
+            "--minecraft-image",
+            "docker.io/itzg/minecraft-server@sha256:"
+            "9faa6aefeedd5a883c3ee241653fd1421529bdbafc428d0513e43cae0f2b7d68",
+            "--minecraft-version",
+            "1.21.8",
+            "--paper-build",
+            "1",
+            "--accept-minecraft-eula",
         ]
     )
     started = main(

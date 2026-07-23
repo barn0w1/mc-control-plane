@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
+from mc_control_plane.application.host_protocol import (
+    HostAgentObservation,
+    HostCommand,
+    HostCommandKind,
+)
 from mc_control_plane.domain.models import ResourceIdentity, Run
 
 
@@ -35,3 +40,22 @@ class HostBootstrapProvider(Protocol):
 
 class HostObservationProvider(Protocol):
     def get_for_run(self, run_id: str) -> HostObservation | None: ...
+
+
+class HostCommandGateway(Protocol):
+    def get_agent_for_run(self, run_id: str) -> HostAgentObservation | None: ...
+
+    def queue_command(
+        self,
+        *,
+        command_id: str,
+        agent_id: str,
+        operation_id: str,
+        step: str,
+        kind: HostCommandKind,
+        deadline: datetime,
+        now: datetime,
+        payload: dict[str, Any] | None = None,
+    ) -> HostCommand: ...
+
+    def get_command(self, command_id: str) -> HostCommand | None: ...

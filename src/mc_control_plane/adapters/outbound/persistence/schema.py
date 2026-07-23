@@ -284,4 +284,12 @@ MIGRATIONS = (
             """,
         ),
     ),
+    Migration(
+        version=7,
+        name="persist_minecraft_runtime_spec",
+        statements=(
+            "ALTER TABLE server_units ADD COLUMN minecraft_spec_json TEXT",
+            "ALTER TABLE runs ADD COLUMN minecraft_spec_json TEXT",
+        ),
+    ),
 )

@@ -1,7 +1,14 @@
 """Deterministic test adapters."""
 
 from datetime import datetime, timedelta
+from typing import Any
 
+from mc_control_plane.application.host_protocol import (
+    HostAgentObservation,
+    HostCommand,
+    HostCommandKind,
+    HostCommandState,
+)
 from mc_control_plane.application.ports.compute import (
     ComputeActionUncertain,
     ComputeLifecycle,
@@ -45,6 +52,76 @@ class FakeHostManager:
 
     def get_for_run(self, run_id: str) -> HostObservation | None:
         return self.observations.get(run_id)
+
+
+class FakeHostCommandGateway:
+    def __init__(self, run_id: str, now: datetime) -> None:
+        self.agent = HostAgentObservation(
+            agent_id=f"agent-{run_id}",
+            run_id=run_id,
+            resource_identity=run_id,
+            protocol_version=1,
+            agent_version="0.3.4",
+            status="connected",
+            boot_id="boot-1",
+            capabilities={},
+            service_states={},
+            enrolled_at=now,
+            observed_at=now,
+        )
+        self.commands: dict[str, HostCommand] = {}
+
+    def get_agent_for_run(self, run_id: str) -> HostAgentObservation | None:
+        return self.agent if run_id == self.agent.run_id else None
+
+    def queue_command(
+        self,
+        *,
+        command_id: str,
+        agent_id: str,
+        operation_id: str,
+        step: str,
+        kind: HostCommandKind,
+        deadline: datetime,
+        now: datetime,
+        payload: dict[str, Any] | None = None,
+    ) -> HostCommand:
+        command = HostCommand(
+            command_id,
+            agent_id,
+            self.agent.run_id,
+            operation_id,
+            step,
+            kind,
+            1,
+            payload or {},
+            deadline,
+            HostCommandState.PENDING,
+            0,
+            None,
+        )
+        self.commands[command_id] = command
+        return command
+
+    def get_command(self, command_id: str) -> HostCommand | None:
+        return self.commands.get(command_id)
+
+    def succeed(self, command_id: str, observation: dict[str, Any]) -> None:
+        current = self.commands[command_id]
+        self.commands[command_id] = HostCommand(
+            current.command_id,
+            current.agent_id,
+            current.run_id,
+            current.operation_id,
+            current.step,
+            current.kind,
+            current.payload_version,
+            current.payload,
+            current.deadline,
+            HostCommandState.SUCCEEDED,
+            1,
+            {"error_code": None, "message": None, "observation": observation},
+        )
 
 
 class FakeComputeProvider:

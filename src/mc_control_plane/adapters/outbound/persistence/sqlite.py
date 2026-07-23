@@ -10,6 +10,7 @@ from typing import Any, cast
 from mc_control_plane.adapters.outbound.persistence.schema import MIGRATIONS
 from mc_control_plane.domain.errors import PersistenceConflict
 from mc_control_plane.domain.models import (
+    MinecraftSpec,
     Operation,
     Run,
     RuntimeInstance,
@@ -57,6 +58,25 @@ def _runtime_spec(value: str) -> RuntimeSpec:
     )
 
 
+def _minecraft_spec_json(spec: MinecraftSpec | None) -> str | None:
+    if spec is None:
+        return None
+    return json.dumps(spec.as_payload(), separators=(",", ":"), sort_keys=True)
+
+
+def _minecraft_spec(value: str | None) -> MinecraftSpec | None:
+    if value is None:
+        return None
+    raw = cast(dict[str, Any], json.loads(value))
+    return MinecraftSpec(
+        image=cast(str, raw["image"]),
+        minecraft_version=cast(str, raw["minecraft_version"]),
+        paper_build=cast(str, raw["paper_build"]),
+        memory=cast(str, raw["memory"]),
+        eula_accepted=cast(bool, raw["eula"]),
+    )
+
+
 def _text(row: sqlite3.Row, name: str) -> str:
     return cast(str, row[name])
 
@@ -77,6 +97,7 @@ def _server_unit(row: sqlite3.Row) -> ServerUnit:
         runtime_spec=_runtime_spec(_text(row, "runtime_spec_json")),
         created_at=created_at,
         updated_at=updated_at,
+        minecraft_spec=_minecraft_spec(_optional_text(row, "minecraft_spec_json")),
     )
 
 
@@ -90,6 +111,7 @@ def _run(row: sqlite3.Row) -> Run:
         source_snapshot_id=_optional_text(row, "source_snapshot_id"),
         started_at=started_at,
         ended_at=_datetime(_optional_text(row, "ended_at")),
+        minecraft_spec=_minecraft_spec(_optional_text(row, "minecraft_spec_json")),
     )
 
 
@@ -221,8 +243,9 @@ class SQLiteServerUnitRepository:
         self._execute(
             """
             INSERT INTO server_units(
-                id, name, desired_state, runtime_spec_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                id, name, desired_state, runtime_spec_json, created_at, updated_at,
+                minecraft_spec_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 server_unit.id,
@@ -231,6 +254,7 @@ class SQLiteServerUnitRepository:
                 _runtime_spec_json(server_unit.runtime_spec),
                 server_unit.created_at.isoformat(),
                 server_unit.updated_at.isoformat(),
+                _minecraft_spec_json(server_unit.minecraft_spec),
             ),
         )
 
@@ -244,7 +268,8 @@ class SQLiteServerUnitRepository:
         cursor = self._execute(
             """
             UPDATE server_units
-            SET name = ?, desired_state = ?, runtime_spec_json = ?, updated_at = ?
+            SET name = ?, desired_state = ?, runtime_spec_json = ?, updated_at = ?,
+                minecraft_spec_json = ?
             WHERE id = ?
             """,
             (
@@ -252,6 +277,7 @@ class SQLiteServerUnitRepository:
                 server_unit.desired_state,
                 _runtime_spec_json(server_unit.runtime_spec),
                 server_unit.updated_at.isoformat(),
+                _minecraft_spec_json(server_unit.minecraft_spec),
                 server_unit.id,
             ),
         )
@@ -275,8 +301,8 @@ class SQLiteRunRepository:
                 """
                 INSERT INTO runs(
                     id, server_unit_id, runtime_spec_json, source_snapshot_id,
-                    started_at, ended_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    started_at, ended_at, minecraft_spec_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run.id,
@@ -285,6 +311,7 @@ class SQLiteRunRepository:
                     run.source_snapshot_id,
                     run.started_at.isoformat(),
                     _datetime_text(run.ended_at),
+                    _minecraft_spec_json(run.minecraft_spec),
                 ),
             )
         except sqlite3.IntegrityError as error:
@@ -306,7 +333,7 @@ class SQLiteRunRepository:
             """
             UPDATE runs
             SET server_unit_id = ?, runtime_spec_json = ?, source_snapshot_id = ?,
-                started_at = ?, ended_at = ?
+                started_at = ?, ended_at = ?, minecraft_spec_json = ?
             WHERE id = ?
             """,
             (
@@ -315,6 +342,7 @@ class SQLiteRunRepository:
                 run.source_snapshot_id,
                 run.started_at.isoformat(),
                 _datetime_text(run.ended_at),
+                _minecraft_spec_json(run.minecraft_spec),
                 run.id,
             ),
         )
@@ -523,6 +551,17 @@ class SQLiteSnapshotRepository:
             (server_unit_id,),
         ).fetchone()
         return None if row is None else _snapshot(row)
+
+    def list_for_server_unit(self, server_unit_id: str) -> list[Snapshot]:
+        rows = self._connection.execute(
+            """
+            SELECT * FROM snapshots
+            WHERE server_unit_id = ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (server_unit_id,),
+        ).fetchall()
+        return [_snapshot(row) for row in rows]
 
     def save(self, snapshot: Snapshot) -> None:
         cursor = self._connection.execute(

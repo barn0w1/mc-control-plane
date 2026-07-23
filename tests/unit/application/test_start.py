@@ -19,7 +19,7 @@ from mc_control_plane.application.workflows.start import (
     StartWorkflow,
     delete_owned_runtime,
 )
-from mc_control_plane.domain.errors import ActiveRunExists, ResourceOwnershipMismatch
+from mc_control_plane.domain.errors import OperationConflict, ResourceOwnershipMismatch
 from mc_control_plane.domain.models import ResourceIdentity, ServerUnit
 from mc_control_plane.domain.states import DesiredState, OperationState, StartStep
 from tests.fakes import FakeComputeProvider, FakeHostManager, MutableClock, SequenceIds
@@ -64,8 +64,9 @@ def test_start_request_reserves_run_and_rejects_duplicate(
         assert work.server_units.get(server_unit.id).desired_state is DesiredState.RUNNING
 
     duplicate = RequestStart(unit_of_work, clock, SequenceIds("run-2", "operation-2"))
-    with pytest.raises(ActiveRunExists):
+    with pytest.raises(OperationConflict) as conflict:
         duplicate(StartServerUnit(server_unit.id))
+    assert conflict.value.operation_id == accepted.operation_id
 
 
 def test_start_workflow_creates_once_and_advances_to_host_boundary(
