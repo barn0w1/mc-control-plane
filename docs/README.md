@@ -6,8 +6,8 @@
 これにより、Linode作成、Debian 13 Host bootstrap、永続start、R2/restic data lifecycle、
 Paperのstart・手動snapshot・stop・fresh Host restore/restartという技術的な一周を確認した。
 
-ただし、Gate 5の一周はacceptance harnessで実行している。通常運用向けの永続Start/Stop/Snapshot
-Operationと個別CLIはまだ完成していない。Gate完了とOperational MVP完成を同じ意味で扱わない。
+通常運用向けの永続Start/Stop/Snapshot Operationと個別CLIへの接続、自動scenario testまで完了した。
+通常CLIによる実accountの一周は未検証なので、Gate完了とOperational MVPの実環境Completeは区別する。
 
 ## 正本
 
@@ -17,6 +17,7 @@ Operationと個別CLIはまだ完成していない。Gate完了とOperational M
 | [Architecture](architecture.md) | system境界、依存方向、不変条件 |
 | [Project structure](project-structure.md) | 現在のpackage配置と責務 |
 | [State machines](state-machines.md) | layer別状態とworkflowの実装範囲 |
+| [通常運用CLI](normal-operations.md) | product workflowの起動、操作、競合、retry |
 
 設計判断はADR、実環境の証拠と再実行手順はGate文書へ記録する。READMEは入口に留め、詳細な判断や
 長い実測logを重複させない。
@@ -58,6 +59,7 @@ Gate文書は通常利用者向け操作説明ではなく、課金を伴うacce
 - [ADR-0013: passwordless restic repositoryを使用する](decisions/0013-use-passwordless-restic-repositories.md)
 - [ADR-0014: Paper Quadletを固定しhealthで判定する](decisions/0014-pin-and-health-gate-paper-quadlet.md)
 - [ADR-0015: Minecraft専用identityを使用する](decisions/0015-use-dedicated-minecraft-identity.md)
+- [ADR-0016: 操作interfaceを共有use caseへ接続し、Operationを直列化する](decisions/0016-serialize-application-operations.md)
 
 ## 更新規則
 

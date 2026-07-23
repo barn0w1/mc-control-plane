@@ -43,6 +43,11 @@ stateDiagram-v2
 
 API timeoutは直ちに失敗とはみなしません。GET/listによる再観測を行い、actionが実際には成功していたか確認します。
 
+一つのServer Unitにactive Operationは最大一つです。active Operation中の別要求は現在のoperation ID、
+kind、state、stepを返して拒否し、中断や暗黙queueは行いません。`blocked`は原因修正後に
+`operation-retry`で同じOperationを再開します。Host command IDはOperation、action step、attemptから
+決定するため、同じattemptのprocess再開は同じcommandを観測し、明示retryは新しいcommandになります。
+
 ## 3. Linode provider status
 
 ### 3.1 正式な値
@@ -226,40 +231,23 @@ stateDiagram-v2
 
 ```mermaid
 flowchart TD
-    A["Start要求"] --> B{"active Runがあるか"}
-    B -- Yes --> C["既存Runの状態を返す"]
-    B -- No --> D["transaction内でRunを作成"]
-    D --> E{"同じrun_idのLinodeがあるか"}
-    E -- Yes --> F["既存Linodeを採用"]
-    E -- No --> G["Linodeを作成"]
-    F --> H["provider statusを観測"]
+    A["Start要求"] --> B["Runとeffective specを保存"]
+    B --> C["Linode発見または作成"]
+    C --> D["provider runningとHost readyを待つ"]
+    D --> E{"source snapshot"}
+    E -- あり --> F["指定IDをrestore"]
+    E -- なし --> G["repository初期化"]
+    F --> H["Quadlet適用"]
     G --> H
-    H --> I{"runningか"}
-    I -- No --> J{"待機を継続できるか"}
-    J -- Yes --> U["待機して再観測"]
-    U --> H
-    J -- No --> Q["Operationをblocked"]
-    I -- Yes --> K{"Host readyか"}
-    K -- No --> L{"retry可能か"}
-    L -- Yes --> V["待機またはretry"]
-    V --> K
-    L -- No --> Q
-    K -- Yes --> W["検証済みQuadletを適用"]
-    W --> M{"復元元snapshotがあるか"}
-    M -- Yes --> N["指定IDをrestore"]
-    M -- No --> O["空のServer Unitを用意"]
-    N --> P{"restore成功か"}
-    P -- No --> Q
-    P -- Yes --> R["Minecraft起動"]
-    O --> R
-    R --> S{"readiness成功か"}
-    S -- No --> Q
-    S -- Yes --> T["Run active"]
+    H --> I["Minecraft start"]
+    I --> J{"ready"}
+    J -- Yes --> K["Operation succeeded"]
+    J -- No --> L["retry_waitまたはblocked"]
 ```
 
-現在の通常`server-unit-start`と永続`StartWorkflow`が担当するのは、Linode作成、Host enrollment、
-capability確認を経てHost readyへ到達するところまでです。restore、Quadlet適用、Minecraft起動は
-Gate 5 acceptance harnessで一周を実証済みですが、通常運用の永続stepへはまだ接続していません。
+通常`server-unit-start`は明示snapshot IDがなければ最新のcommit済みsnapshotを選ぶ。Runには開始時の
+`RuntimeSpec`と`MinecraftSpec`をコピーし、途中のServer Unit設定変更を反映しない。各Host actionは
+永続commandをqueueするstepと結果を待つstepに分かれ、Control Plane再起動後も再開できる。
 
 ## 8. Stop workflow
 
@@ -284,8 +272,9 @@ flowchart TD
 
 新しいsnapshotの作成に失敗した状態でLinodeを削除しません。限定回数のretryで解決しなければ、手動確認が可能な`blocked`へ移行します。
 
-この順序はGate 5 acceptance harnessで実機検証済みです。通常の`server-unit-stop` commandと永続Stop
-Operationは未実装であり、次段ではこの検証済みprimitiveをproduct workflowへ移す必要があります。
+この順序はGate 5 acceptance harnessで実機検証済みであり、通常の`server-unit-stop`と永続Stop
+Operationへ接続済みです。停止snapshot recordを同じtransactionでcommitしてから削除stepへ進み、
+provider IDの不存在を確認してRunを終了します。
 
 ## 9. 実行中の手動snapshot
 
@@ -309,6 +298,8 @@ flowchart TD
 
 agentがpause中に中断した場合、at-least-onceで同じcommandを再実行する前にunpauseと`save-on`を
 行います。snapshot失敗時はMinecraftを停止せず、最後にcommit済みのsnapshotを復旧点として維持します。
+通常の`server-unit-snapshot`はこのcommandを永続Snapshot Operationから実行し、成功したsnapshot IDを
+`manual`種別でcommitします。
 
 ## 10. 利用者向け表示状態
 

@@ -249,5 +249,7 @@ Discord adapterはstart/stop workflowが安定した後に追加します。
 この土台とGate 1から5のlive acceptanceは完成している。Gate 5では2台のfresh LinodeでPaper start、
 quiesced snapshot、graceful stop、停止後snapshot、内容一致restore、restart、cleanupを確認した。
 
-次の実装境界は、Gate harness内の一連の処理を通常運用の永続Start、Stop、Snapshot Operationと個別CLIへ
-接続することである。中期目標全体の完成条件は[Operational MVP](operational-mvp.md)を正本とする。
+Gate harness内で検証した処理は、通常運用の永続Start、Stop、Snapshot Operation、snapshot一覧、
+個別CLIへ接続済みである。次の境界は通常CLIによる実account acceptanceと、Control Plane process群の
+system service packagingである。中期目標全体の完成条件は[Operational MVP](operational-mvp.md)を
+正本とする。
