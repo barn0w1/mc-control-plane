@@ -73,10 +73,10 @@ live acceptanceまで完了しています。Gate 4もR2 temporary credential、
 live acceptanceまで完了しています。実地検証で見つかったR2権限preflight、SQLite writer競合、
 command delivery、snapshot検証時刻の意味も修正済みです。Gate 5は固定Paper Quadlet、health-based
 readiness、graceful stop、安全な手動snapshot、2台のfresh Hostによるrestore/restart harnessまで
-実装し、自動testを通過しています。live試行で見つかったentrypointのownership変更・`gosu`停止点に
-対して、agent 0.3.2ではimage既定の専用identityとQuadletの直接non-root起動へ改め、container内の
-UID/GID変更とprivilege transitionを起動経路から除外しています。修正版の実account live acceptanceは
-未実施です。
+実装し、自動testを通過しています。live試行で見つかったentrypointのownership変更・`gosu`停止点は
+直接non-root起動で解消し、Paperのhealth `healthy`まで実地確認済みです。その試行で見つかったHost
+agent sandboxのPodman storage lock拒否と`absent`誤分類に対して、agent 0.3.3では必要なrootful Podman
+領域だけを許可し、storage障害を独立して報告します。0.3.3での実account live acceptanceは未実施です。
 中期的には、Infra lifecycleとDebian 13 Host foundationをMinecraftより先に完成させ、
 その上で一つのServer Unitのstart、snapshot、stop、再restoreを一周させます。
 後方互換性はまだ要求せず、実装から得た知見に基づく破壊的変更を許容します。
