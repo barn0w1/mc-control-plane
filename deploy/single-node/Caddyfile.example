@@ -1,0 +1,15 @@
+mc-control-plane.hss-science.org {
+	@allowed <<CEL
+		(method('POST') && path('/v1/host/enroll', '/v1/host/poll'))
+		||
+		(method('GET') && path('/artifacts/host-agent.whl'))
+	CEL
+
+	handle @allowed {
+		reverse_proxy http://127.0.0.1:8443
+	}
+
+	handle {
+		respond 404
+	}
+}

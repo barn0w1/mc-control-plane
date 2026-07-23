@@ -199,7 +199,9 @@ def serve_host_api(
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "application/zip")
                 self.send_header("Content-Length", str(size))
-                self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+                # The URL is intentionally stable for operational simplicity.
+                # Cloud-init independently verifies the configured SHA-256 digest.
+                self.send_header("Cache-Control", "no-store")
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.end_headers()
                 while chunk := stream.read(64 * 1024):

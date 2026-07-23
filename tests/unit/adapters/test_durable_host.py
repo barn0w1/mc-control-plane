@@ -25,6 +25,17 @@ def _wheel(tmp_path: Path) -> Path:
     return wheel
 
 
+def test_managed_stable_wheel_name_is_accepted(tmp_path: Path, database: SQLiteDatabase) -> None:
+    wheel = tmp_path / "host-agent.whl"
+    wheel.write_bytes(b"test-wheel")
+
+    DurableHostManager(
+        HostProtocolStore(database),
+        DurableHostSettings("https://control.example.test", wheel, IMAGE),
+        b"k" * 32,
+    )
+
+
 def test_bootstrap_is_reproducible_and_database_keeps_only_token_hash(
     tmp_path: Path,
     database: SQLiteDatabase,

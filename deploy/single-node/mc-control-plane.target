@@ -1,0 +1,7 @@
+[Unit]
+Description=mc-control-plane single-node services
+Wants=mc-control-plane-host-api.service mc-control-plane-reconciler.service
+After=network-online.target
+
+[Install]
+WantedBy=multi-user.target

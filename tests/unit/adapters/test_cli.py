@@ -1,7 +1,9 @@
 import json
+import os
 from pathlib import Path
 
 from mc_control_plane.adapters.inbound.cli import main
+from mc_control_plane.adapters.outbound.host import create_bootstrap_key
 
 
 def test_gate1_cli_requires_explicit_billable_confirmation(
@@ -252,3 +254,94 @@ def test_host_bootstrap_key_cli_refuses_overwrite(tmp_path: Path) -> None:
     assert main(["host-bootstrap-key-create", str(key)]) == 0
     assert main(["host-bootstrap-key-create", str(key)]) == 1
     assert key.stat().st_mode & 0o777 == 0o600
+
+
+def test_short_status_uses_node_configuration(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    database = tmp_path / "control.db"
+    assert (
+        main(
+            [
+                "server-unit-create",
+                "--database",
+                str(database),
+                "--id",
+                "survival",
+                "--name",
+                "Survival",
+                "--region",
+                "jp-tyo-3",
+                "--instance-type",
+                "g6-nanode-1",
+                "--firewall-id",
+                "79203454",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f"""
+[control_plane]
+database = "{database}"
+system_id = "mc-control-plane"
+control_plane_url = "https://control.example.test"
+host_bootstrap_key = "{tmp_path}/host-bootstrap.key"
+agent_wheel = "{tmp_path}/host-agent.whl"
+fixture_image = "docker.io/library/alpine@sha256:{"a" * 64}"
+ssh_public_keys = ["{tmp_path}/id_ed25519.pub"]
+
+[host_api]
+
+[r2]
+account_id = "account"
+bucket = "mccp-data"
+parent_access_key_id = "parent"
+cloudflare_api_token_file = "{tmp_path}/cloudflare-api-token"
+"""
+    )
+
+    result = main(["status", "survival", "--config", str(config)])
+    output = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    assert output["server_unit"]["id"] == "survival"
+
+
+def test_node_check_validates_local_runtime_inputs(tmp_path: Path, capsys, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    bootstrap_key = tmp_path / "host-bootstrap.key"
+    create_bootstrap_key(bootstrap_key)
+    wheel = tmp_path / "host-agent.whl"
+    wheel.write_bytes(b"wheel")
+    ssh_key = tmp_path / "id_ed25519.pub"
+    ssh_key.write_text("ssh-ed25519 AAAA test")
+    cloudflare_token = tmp_path / "cloudflare-api-token"
+    cloudflare_token.write_text("x" * 32)
+    os.chmod(cloudflare_token, 0o600)
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f"""
+[control_plane]
+database = "{tmp_path}/control.db"
+system_id = "mc-control-plane"
+control_plane_url = "https://control.example.test"
+host_bootstrap_key = "{bootstrap_key}"
+agent_wheel = "{wheel}"
+fixture_image = "docker.io/library/alpine@sha256:{"a" * 64}"
+ssh_public_keys = ["{ssh_key}"]
+
+[host_api]
+
+[r2]
+account_id = "account"
+bucket = "mccp-data"
+parent_access_key_id = "parent"
+cloudflare_api_token_file = "{cloudflare_token}"
+"""
+    )
+    monkeypatch.setenv("LINODE_TOKEN", "linode-token")
+
+    result = main(["node-check", "--config", str(config)])
+
+    assert result == 0
+    assert "Node configuration passed" in capsys.readouterr().out

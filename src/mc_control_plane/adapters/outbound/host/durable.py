@@ -69,8 +69,11 @@ class DurableHostManager(StoredHostObservations):
         if len(bootstrap_key) < 32:
             raise ValueError("Host bootstrap key must contain at least 32 bytes")
         expected = f"mccp_host_agent-{HOST_AGENT_VERSION}-py3-none-any.whl"
-        if settings.agent_wheel.name != expected:
-            raise ValueError(f"Host agent wheel must be named {expected}")
+        allowed_names = {expected, "host-agent.whl"}
+        if settings.agent_wheel.name not in allowed_names:
+            raise ValueError(
+                f"Host agent wheel must be named {expected} or use the managed stable name"
+            )
         wheel = settings.agent_wheel.read_bytes()
         super().__init__(store)
         self._store = store

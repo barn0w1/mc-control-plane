@@ -78,8 +78,10 @@ from mc_control_plane.application.support import SystemClock, UuidGenerator
 from mc_control_plane.application.workflows.snapshot import SnapshotWorkflow
 from mc_control_plane.application.workflows.start import StartWorkflow
 from mc_control_plane.application.workflows.stop import StopWorkflow
+from mc_control_plane.config import DEFAULT_CONFIG_PATH, NodeConfig, load_node_config
 from mc_control_plane.domain.errors import ControlPlaneError
 from mc_control_plane.domain.models import MinecraftSpec, RuntimeSpec
+from mc_control_plane.domain.states import OperationState
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -109,12 +111,14 @@ def _parser() -> argparse.ArgumentParser:
         "--source-snapshot-id",
         help="restore this owned snapshot instead of selecting the latest snapshot",
     )
+    _add_wait_arguments(unit_start)
 
     unit_snapshot = commands.add_parser(
         "server-unit-snapshot", help="request a durable live Minecraft snapshot"
     )
     unit_snapshot.add_argument("--database", required=True, type=Path)
     unit_snapshot.add_argument("--server-unit-id", required=True)
+    _add_wait_arguments(unit_snapshot)
 
     unit_stop = commands.add_parser(
         "server-unit-stop",
@@ -122,6 +126,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     unit_stop.add_argument("--database", required=True, type=Path)
     unit_stop.add_argument("--server-unit-id", required=True)
+    _add_wait_arguments(unit_stop)
 
     unit_status = commands.add_parser("server-unit-status", help="show layered status as JSON")
     unit_status.add_argument("--database", required=True, type=Path)
@@ -154,6 +159,58 @@ def _parser() -> argparse.ArgumentParser:
     reconciler.add_argument("--limit", type=int, default=32)
     reconciler.add_argument("--once", action="store_true")
     _add_ssh_key_argument(reconciler)
+
+    node_host_api = commands.add_parser(
+        "node-host-api",
+        help="run the configured resident Host API process",
+    )
+    node_host_api.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+
+    node_reconciler = commands.add_parser(
+        "node-reconciler",
+        help="run the configured resident asynchronous reconciler",
+    )
+    node_reconciler.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+
+    node_check = commands.add_parser(
+        "node-check",
+        help="validate resident-node configuration and local files",
+    )
+    node_check.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+
+    short_start = commands.add_parser("start", help="request start using node configuration")
+    short_start.add_argument("server_unit_id")
+    short_start.add_argument("--snapshot", dest="source_snapshot_id")
+    short_start.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    _add_wait_arguments(short_start)
+
+    short_snapshot = commands.add_parser(
+        "snapshot", help="request a live snapshot using node configuration"
+    )
+    short_snapshot.add_argument("server_unit_id")
+    short_snapshot.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    _add_wait_arguments(short_snapshot)
+
+    short_stop = commands.add_parser("stop", help="request stop using node configuration")
+    short_stop.add_argument("server_unit_id")
+    short_stop.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    _add_wait_arguments(short_stop)
+
+    short_status = commands.add_parser("status", help="show status using node configuration")
+    short_status.add_argument("server_unit_id")
+    short_status.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+
+    short_snapshots = commands.add_parser(
+        "snapshots", help="list snapshots using node configuration"
+    )
+    short_snapshots.add_argument("server_unit_id")
+    short_snapshots.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+
+    short_retry = commands.add_parser(
+        "retry", help="retry a blocked Operation using node configuration"
+    )
+    short_retry.add_argument("operation_id")
+    short_retry.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
 
     gate3_cleanup = commands.add_parser(
         "linode-gate3-cleanup",
@@ -308,6 +365,15 @@ def _add_ssh_key_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_wait_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="wait in this CLI process while resident services continue independently",
+    )
+    parser.add_argument("--wait-timeout-seconds", type=float, default=3600.0)
+
+
 def _runtime_spec(arguments: argparse.Namespace) -> RuntimeSpec:
     return RuntimeSpec(
         region=arguments.region,
@@ -351,6 +417,25 @@ def _linode_provider(arguments: argparse.Namespace) -> LinodeComputeProvider:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
+    try:
+        arguments, node_config = _resolve_operational_arguments(arguments)
+    except (OSError, ValueError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    if arguments.command == "node-check":
+        assert node_config is not None
+        try:
+            _check_node(node_config)
+        except (OSError, ValueError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print(
+            "Node configuration passed: "
+            f"database={node_config.control_plane.database} "
+            f"host-api={node_config.host_api.bind}:{node_config.host_api.port} "
+            f"artifact={HOST_AGENT_ARTIFACT_PATH}"
+        )
+        return 0
     if arguments.command == "init-db":
         database = SQLiteDatabase(arguments.database)
         database.migrate()
@@ -399,7 +484,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
                 )
                 print(f"Start accepted: operation={accepted.operation_id} run={accepted.run_id}")
-                return 0
+                return _maybe_wait(arguments, unit_of_work, accepted.operation_id)
             if arguments.command == "server-unit-snapshot":
                 lifecycle_accepted = RequestSnapshot(unit_of_work, clock, UuidGenerator())(
                     arguments.server_unit_id
@@ -408,7 +493,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"Snapshot accepted: operation={lifecycle_accepted.operation_id} "
                     f"run={lifecycle_accepted.run_id}"
                 )
-                return 0
+                return _maybe_wait(arguments, unit_of_work, lifecycle_accepted.operation_id)
             if arguments.command == "server-unit-stop":
                 lifecycle_accepted = RequestStop(unit_of_work, clock, UuidGenerator())(
                     arguments.server_unit_id
@@ -417,7 +502,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"Stop accepted: operation={lifecycle_accepted.operation_id} "
                     f"run={lifecycle_accepted.run_id}"
                 )
-                return 0
+                return _maybe_wait(arguments, unit_of_work, lifecycle_accepted.operation_id)
             if arguments.command == "operation-retry":
                 operation = RequestOperationRetry(unit_of_work, clock)(arguments.operation_id)
                 print(
@@ -446,37 +531,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
     if arguments.command == "host-api-serve":
         try:
-            database = SQLiteDatabase(arguments.database)
-            database.migrate()
-            store = HostProtocolStore(database)
-            data_leases = _data_lease_broker(arguments, store)
-            if data_leases is not None:
-                r2_report = data_leases.preflight()
-                print(
-                    "R2 data lease preflight passed: "
-                    f"bucket={r2_report.bucket} permission={r2_report.permission} "
-                    f"ttl={r2_report.ttl_seconds}s",
-                    flush=True,
-                )
-            print(
-                f"Serving Host API on {arguments.bind}:{arguments.port} "
-                f"artifact-path={HOST_AGENT_ARTIFACT_PATH}",
-                flush=True,
-            )
-            serve_host_api(
-                HostApiApplication(
-                    store,
-                    data_leases=data_leases,
-                    report_error=lambda message: print(
-                        f"Host API temporary error: {message}", file=sys.stderr
-                    ),
-                ),
-                bind=arguments.bind,
-                port=arguments.port,
-                tls_certificate=arguments.tls_certificate,
-                tls_private_key=arguments.tls_private_key,
-                agent_artifact=arguments.agent_wheel,
-            )
+            _run_host_api(arguments)
         except KeyboardInterrupt:
             return 0
         except (DataLeaseUnavailable, OSError, ValueError) as error:
@@ -779,6 +834,173 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
     raise AssertionError(f"unhandled command: {arguments.command}")
+
+
+def _resolve_operational_arguments(
+    arguments: argparse.Namespace,
+) -> tuple[argparse.Namespace, NodeConfig | None]:
+    config_commands = {
+        "node-host-api",
+        "node-reconciler",
+        "node-check",
+        "start",
+        "snapshot",
+        "stop",
+        "status",
+        "snapshots",
+        "retry",
+    }
+    if arguments.command not in config_commands:
+        return arguments, None
+
+    config = load_node_config(arguments.config)
+    control = config.control_plane
+    if arguments.command == "node-check":
+        return arguments, config
+    if arguments.command == "node-host-api":
+        host_api = config.host_api
+        r2 = config.r2
+        return (
+            argparse.Namespace(
+                command="host-api-serve",
+                database=control.database,
+                bind=host_api.bind,
+                port=host_api.port,
+                tls_certificate=host_api.tls_certificate,
+                tls_private_key=host_api.tls_private_key,
+                agent_wheel=control.agent_wheel,
+                r2_account_id=r2.account_id,
+                r2_bucket=r2.bucket,
+                r2_parent_access_key_id=r2.parent_access_key_id,
+                cloudflare_api_token_file=r2.cloudflare_api_token_file,
+                r2_lease_ttl_seconds=r2.lease_ttl_seconds,
+            ),
+            config,
+        )
+    if arguments.command == "node-reconciler":
+        return (
+            argparse.Namespace(
+                command="reconciler-run",
+                database=control.database,
+                host_bootstrap_key=control.host_bootstrap_key,
+                control_plane_url=control.control_plane_url,
+                agent_wheel=control.agent_wheel,
+                fixture_image=control.fixture_image,
+                system_id=control.system_id,
+                interval_seconds=control.interval_seconds,
+                limit=control.operation_limit,
+                once=False,
+                ssh_public_key=list(control.ssh_public_keys),
+            ),
+            config,
+        )
+
+    aliases = {
+        "start": "server-unit-start",
+        "snapshot": "server-unit-snapshot",
+        "stop": "server-unit-stop",
+        "status": "server-unit-status",
+        "snapshots": "server-unit-snapshots",
+        "retry": "operation-retry",
+    }
+    arguments.command = aliases[arguments.command]
+    arguments.database = control.database
+    return arguments, config
+
+
+def _check_node(config: NodeConfig) -> None:
+    control = config.control_plane
+    if not control.database.parent.is_dir():
+        raise ValueError(f"database parent directory does not exist: {control.database.parent}")
+    load_bootstrap_key(control.host_bootstrap_key)
+    artifact_sha256(control.agent_wheel.read_bytes())
+    for key in control.ssh_public_keys:
+        if not key.read_text().strip():
+            raise ValueError(f"SSH public key is empty: {key}")
+    load_secret_file(config.r2.cloudflare_api_token_file)
+    if not os.environ.get("LINODE_TOKEN", "").strip():
+        raise ValueError("LINODE_TOKEN must be set in the environment")
+
+
+def _maybe_wait(
+    arguments: argparse.Namespace,
+    unit_of_work: UnitOfWorkFactoryPort,
+    operation_id: str,
+) -> int:
+    if not getattr(arguments, "wait", False):
+        return 0
+    timeout = arguments.wait_timeout_seconds
+    if timeout <= 0:
+        raise ValueError("wait timeout must be positive")
+    deadline = time.monotonic() + timeout
+    previous: tuple[str, str, str | None] | None = None
+    while True:
+        with unit_of_work() as work:
+            operation = work.operations.get(operation_id)
+        if operation is None:
+            raise ValueError(f"operation disappeared while waiting: {operation_id}")
+        current = (
+            operation.state.value,
+            str(operation.step),
+            operation.last_error_code,
+        )
+        if current != previous:
+            print(
+                f"Operation: id={operation.id} state={current[0]} step={current[1]}"
+                + ("" if current[2] is None else f" error={current[2]}"),
+                flush=True,
+            )
+            previous = current
+        if operation.state is OperationState.SUCCEEDED:
+            return 0
+        if operation.state in {OperationState.BLOCKED, OperationState.CANCELLED}:
+            print(
+                f"error: operation ended in {operation.state.value}: "
+                f"{operation.last_error_message or operation.last_error_code or 'no detail'}",
+                file=sys.stderr,
+            )
+            return 1
+        if time.monotonic() >= deadline:
+            print(
+                f"error: timed out waiting for operation {operation_id}; it continues in background",
+                file=sys.stderr,
+            )
+            return 2
+        time.sleep(2)
+
+
+def _run_host_api(arguments: argparse.Namespace) -> None:
+    database = SQLiteDatabase(arguments.database)
+    database.migrate()
+    store = HostProtocolStore(database)
+    data_leases = _data_lease_broker(arguments, store)
+    if data_leases is not None:
+        r2_report = data_leases.preflight()
+        print(
+            "R2 data lease preflight passed: "
+            f"bucket={r2_report.bucket} permission={r2_report.permission} "
+            f"ttl={r2_report.ttl_seconds}s",
+            flush=True,
+        )
+    print(
+        f"Serving Host API on {arguments.bind}:{arguments.port} "
+        f"artifact-path={HOST_AGENT_ARTIFACT_PATH}",
+        flush=True,
+    )
+    serve_host_api(
+        HostApiApplication(
+            store,
+            data_leases=data_leases,
+            report_error=lambda message: print(
+                f"Host API temporary error: {message}", file=sys.stderr
+            ),
+        ),
+        bind=arguments.bind,
+        port=arguments.port,
+        tls_certificate=arguments.tls_certificate,
+        tls_private_key=arguments.tls_private_key,
+        agent_artifact=arguments.agent_wheel,
+    )
 
 
 def _data_lease_broker(
