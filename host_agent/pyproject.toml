@@ -1,6 +1,6 @@
 [project]
 name = "mccp-host-agent"
-version = "0.3.1"
+version = "0.3.2"
 description = "Typed execution-host agent for mc-control-plane"
 requires-python = ">=3.13"
 dependencies = []

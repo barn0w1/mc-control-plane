@@ -121,8 +121,8 @@ install -d -m 0700 /var/lib/mc-control-plane-agent
 install -d -m 0700 /var/lib/mc-control-plane-data
 install -d -m 0755 /etc/containers/systemd
 workload_user=mccp-minecraft
-workload_uid=2000
-workload_gid=2000
+workload_uid=1000
+workload_gid=1000
 if getent group "$workload_user" >/dev/null; then
     test "$(getent group "$workload_user" | cut -d: -f3)" = "$workload_gid"
 else

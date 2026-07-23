@@ -20,7 +20,7 @@ IMAGE = "docker.io/library/alpine@sha256:" + "a" * 64
 
 
 def _wheel(tmp_path: Path) -> Path:
-    wheel = tmp_path / "mccp_host_agent-0.3.1-py3-none-any.whl"
+    wheel = tmp_path / "mccp_host_agent-0.3.2-py3-none-any.whl"
     wheel.write_bytes(b"test-wheel")
     return wheel
 

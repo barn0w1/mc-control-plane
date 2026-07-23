@@ -4,7 +4,13 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
-from mccp_host_agent.runtime import CompletedCommand, HostActionError, HostRuntime
+from mccp_host_agent.runtime import (
+    MINECRAFT_GID,
+    MINECRAFT_UID,
+    CompletedCommand,
+    HostActionError,
+    HostRuntime,
+)
 
 IMAGE = "docker.io/library/alpine@sha256:" + "a" * 64
 MINECRAFT_IMAGE = "docker.io/itzg/minecraft-server@sha256:" + "b" * 64
@@ -116,6 +122,10 @@ class FakeRunner:
                 self.minecraft_paused = False
             else:
                 self.fixture_state = self.stop_state
+        if values[:4] == ("podman", "inspect", "--format", "{{.Config.User}}"):
+            if self.minecraft_container_status == "absent":
+                return CompletedCommand(1, "", "no such container")
+            return CompletedCommand(0, f"{os.getuid()}:{os.getgid()}\n", "")
         if values[:2] == ("podman", "inspect"):
             if self.minecraft_container_status == "absent":
                 return CompletedCommand(1, "", "no such container")
@@ -132,6 +142,8 @@ class FakeRunner:
             )
         if values[:3] == ("podman", "logs", "--tail"):
             return CompletedCommand(0, "[init] useful startup detail\n", "")
+        if values[:2] == ("podman", "top"):
+            return CompletedCommand(0, f"USER PID COMMAND\n{os.getuid()} 42 java\n", "")
         if values[:2] == ("podman", "pause"):
             self.minecraft_paused = True
         if values[:2] == ("podman", "unpause"):
@@ -221,10 +233,12 @@ def test_minecraft_quadlet_is_pinned_and_health_gated(tmp_path: Path) -> None:
     assert len(result["revision"]) == 64
     installed = (quadlets / "mccp-minecraft.container").read_text()
     assert f"Image={MINECRAFT_IMAGE}" in installed
-    assert "User=0:0" not in installed
+    assert f"User={os.getuid()}" in installed
+    assert f"Group={os.getgid()}" in installed
     assert f"Environment=UID={os.getuid()}" in installed
     assert f"Environment=GID={os.getgid()}" in installed
     assert "Environment=SKIP_CHOWN_DATA=TRUE" in installed
+    assert "Environment=SKIP_SUDO" not in installed
     assert "Environment=TYPE=PAPER" in installed
     assert "Environment=VERSION=1.21.8" in installed
     assert "Environment=PAPER_BUILD=42" in installed
@@ -233,6 +247,8 @@ def test_minecraft_quadlet_is_pinned_and_health_gated(tmp_path: Path) -> None:
     assert "PublishPort=25565:25565/tcp" in installed
     assert "HealthCmd=mc-health" in installed
     assert "Notify=healthy" in installed
+    assert "DropCapability=all" in installed
+    assert "NoNewPrivileges=true" in installed
     assert "StopTimeout=180" in installed
     assert "TimeoutStopSec=240" in installed
     assert "latest" not in installed
@@ -242,6 +258,27 @@ def test_minecraft_quadlet_is_pinned_and_health_gated(tmp_path: Path) -> None:
         "verify",
         "mccp-minecraft.service",
     ) in runner.calls
+
+
+def test_minecraft_quadlet_uses_image_native_non_root_identity(tmp_path: Path) -> None:
+    assert (MINECRAFT_UID, MINECRAFT_GID) == (1000, 1000)
+
+    content = HostRuntime._minecraft_quadlet(
+        image=MINECRAFT_IMAGE,
+        minecraft_version="1.21.8",
+        paper_build="42",
+        memory="512M",
+        data=tmp_path / "data",
+        workload_uid=MINECRAFT_UID,
+        workload_gid=MINECRAFT_GID,
+    )
+
+    assert "User=1000\n" in content
+    assert "Group=1000\n" in content
+    assert "Environment=UID=1000\n" in content
+    assert "Environment=GID=1000\n" in content
+    assert "Environment=SKIP_SUDO" not in content
+    assert "DropCapability=all\n" in content
 
 
 def test_minecraft_apply_rejects_missing_workload_identity(tmp_path: Path) -> None:
@@ -319,6 +356,8 @@ def test_minecraft_lifecycle_and_live_snapshot_are_consistent(tmp_path: Path) ->
 def test_minecraft_start_failure_includes_bounded_diagnostics(tmp_path: Path) -> None:
     runner = FakeRunner()
     runner.minecraft_start_returncode = 1
+    runner.minecraft_container_status = "running"
+    runner.minecraft_health = "starting"
     runtime = HostRuntime(
         IMAGE,
         runner=runner,
@@ -342,6 +381,8 @@ def test_minecraft_start_failure_includes_bounded_diagnostics(tmp_path: Path) ->
 
     assert captured.value.code == "minecraft_start_failed"
     assert "diagnostics=" in str(captured.value)
+    assert f"configured_user={os.getuid()}:{os.getgid()}" in str(captured.value)
+    assert "processes=USER PID COMMAND" in str(captured.value)
     assert "useful startup detail" in str(captured.value)
 
 

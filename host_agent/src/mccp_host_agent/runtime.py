@@ -20,8 +20,10 @@ MINECRAFT_UNIT = "mccp-minecraft.service"
 MINECRAFT_QUADLET = "mccp-minecraft.container"
 MINECRAFT_CONTAINER = "mccp-minecraft"
 MINECRAFT_USER = "mccp-minecraft"
-MINECRAFT_UID = 2000
-MINECRAFT_GID = 2000
+# Match the image-native minecraft identity.  Starting the container as this
+# identity makes itzg skip its root-only usermod/groupmod/chown/gosu branch.
+MINECRAFT_UID = 1000
+MINECRAFT_GID = 1000
 RESTORE_MARKER = ".mccp-restored-snapshot"
 RESTIC = ("restic", "--insecure-no-password")
 _DIGEST_IMAGE = re.compile(r"^[a-z0-9][a-z0-9._:/-]+@sha256:[0-9a-f]{64}$")
@@ -580,6 +582,20 @@ class HostRuntime:
             observation = self._minecraft_observation()
         except (HostActionError, OSError, subprocess.SubprocessError):
             observation = {"minecraft": "unavailable"}
+        configured_user = self._diagnostic_command(
+            (
+                "podman",
+                "inspect",
+                "--format",
+                "{{.Config.User}}",
+                MINECRAFT_CONTAINER,
+            ),
+            limit=80,
+        )
+        processes = self._diagnostic_command(
+            ("podman", "top", MINECRAFT_CONTAINER, "user,pid,comm"),
+            limit=240,
+        )
         try:
             logs = self._runner.run(
                 ("podman", "logs", "--tail", "20", MINECRAFT_CONTAINER),
@@ -593,8 +609,18 @@ class HostRuntime:
         return (
             "diagnostics="
             + json.dumps(observation, separators=(",", ":"), sort_keys=True)[:220]
-            + f"; logs={log_tail}"
+            + f"; configured_user={configured_user}; processes={processes}; logs={log_tail}"
         )
+
+    def _diagnostic_command(self, arguments: Sequence[str], *, limit: int) -> str:
+        try:
+            result = self._runner.run(arguments, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            return "unavailable"
+        if result.returncode != 0:
+            return "unavailable"
+        output = " | ".join(result.stdout.strip().splitlines())
+        return output[-limit:] if output else "unavailable"
 
     def _recover_paused_minecraft(self) -> None:
         state = self._minecraft_container_state()
@@ -826,6 +852,8 @@ class HostRuntime:
             "[Container]\n"
             f"Image={image}\n"
             f"ContainerName={MINECRAFT_CONTAINER}\n"
+            f"User={workload_uid}\n"
+            f"Group={workload_gid}\n"
             "Pull=missing\n"
             f"Volume={data}:/data\n"
             "PublishPort=25565:25565/tcp\n"
@@ -846,6 +874,7 @@ class HostRuntime:
             "HealthRetries=60\n"
             "HealthStartPeriod=2m\n"
             "Notify=healthy\n"
+            "DropCapability=all\n"
             "NoNewPrivileges=true\n\n"
             "[Service]\n"
             "Restart=on-failure\n"
