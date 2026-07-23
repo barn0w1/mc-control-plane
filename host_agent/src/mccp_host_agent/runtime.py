@@ -19,6 +19,9 @@ AGENT_UNIT = "mccp-host-agent.service"
 MINECRAFT_UNIT = "mccp-minecraft.service"
 MINECRAFT_QUADLET = "mccp-minecraft.container"
 MINECRAFT_CONTAINER = "mccp-minecraft"
+MINECRAFT_USER = "mccp-minecraft"
+MINECRAFT_UID = 2000
+MINECRAFT_GID = 2000
 RESTORE_MARKER = ".mccp-restored-snapshot"
 RESTIC = ("restic", "--insecure-no-password")
 _DIGEST_IMAGE = re.compile(r"^[a-z0-9][a-z0-9._:/-]+@sha256:[0-9a-f]{64}$")
@@ -82,12 +85,18 @@ class HostRuntime:
         generator: Path = Path("/usr/lib/systemd/system-generators/podman-system-generator"),
         run_id: str = "local-test-run",
         data_root: Path = Path("/var/lib/mc-control-plane-data"),
+        workload_user: str = MINECRAFT_USER,
+        workload_uid: int = MINECRAFT_UID,
+        workload_gid: int = MINECRAFT_GID,
     ) -> None:
         self._fixture_image = fixture_image
         self._runner = runner or SubprocessCommandRunner()
         self._quadlet_directory = quadlet_directory
         self._generator = generator
         self._run_directory = data_root / hashlib.sha256(run_id.encode()).hexdigest()
+        self._workload_user = workload_user
+        self._workload_uid = workload_uid
+        self._workload_gid = workload_gid
 
     def capabilities(self) -> dict[str, object]:
         os_release = self._os_release()
@@ -233,12 +242,15 @@ class HostRuntime:
             )
         data = self._data_directory(require_empty=False)
         data.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._prepare_minecraft_data(data)
         content = self._minecraft_quadlet(
             image=image,
             minecraft_version=minecraft_version,
             paper_build=paper_build,
             memory=memory,
             data=data,
+            workload_uid=self._workload_uid,
+            workload_gid=self._workload_gid,
         )
         revision = hashlib.sha256(content.encode()).hexdigest()
         self._install_quadlet(content, MINECRAFT_QUADLET, MINECRAFT_UNIT)
@@ -247,11 +259,17 @@ class HostRuntime:
     def start_minecraft(self) -> dict[str, object]:
         observation = self._minecraft_observation()
         if observation["minecraft"] != "ready":
-            self._checked(
-                ("systemctl", "start", MINECRAFT_UNIT),
-                timeout=900,
-                code="minecraft_start_failed",
-            )
+            try:
+                self._checked(
+                    ("systemctl", "start", MINECRAFT_UNIT),
+                    timeout=900,
+                    code="minecraft_start_failed",
+                )
+            except HostActionError as error:
+                raise HostActionError(
+                    error.code,
+                    f"{error}; {self._minecraft_start_diagnostics()}",
+                ) from error
             observation = self._minecraft_observation()
         if observation["minecraft"] != "ready":
             raise HostActionError(
@@ -557,6 +575,27 @@ class HostRuntime:
             "paused": value.get("Paused") is True,
         }
 
+    def _minecraft_start_diagnostics(self) -> str:
+        try:
+            observation = self._minecraft_observation()
+        except (HostActionError, OSError, subprocess.SubprocessError):
+            observation = {"minecraft": "unavailable"}
+        try:
+            logs = self._runner.run(
+                ("podman", "logs", "--tail", "20", MINECRAFT_CONTAINER),
+                timeout=15,
+            )
+            log_tail = " | ".join(logs.stdout.strip().splitlines()[-4:])[-240:]
+            if not log_tail:
+                log_tail = "unavailable"
+        except (OSError, subprocess.SubprocessError):
+            log_tail = "unavailable"
+        return (
+            "diagnostics="
+            + json.dumps(observation, separators=(",", ":"), sort_keys=True)[:220]
+            + f"; logs={log_tail}"
+        )
+
     def _recover_paused_minecraft(self) -> None:
         state = self._minecraft_container_state()
         if state["paused"] is True:
@@ -626,6 +665,71 @@ class HostRuntime:
         if require_empty and data.exists() and any(data.iterdir()):
             raise HostActionError("restore_target_not_empty", "restore target is not empty")
         return data
+
+    def _prepare_minecraft_data(self, data: Path) -> None:
+        passwd = self._runner.run(
+            ("getent", "passwd", self._workload_user),
+            timeout=10,
+        )
+        fields = passwd.stdout.strip().split(":")
+        if (
+            passwd.returncode != 0
+            or len(fields) != 7
+            or fields[0] != self._workload_user
+            or fields[2] != str(self._workload_uid)
+            or fields[3] != str(self._workload_gid)
+            or fields[6] != "/usr/sbin/nologin"
+        ):
+            raise HostActionError(
+                "minecraft_identity_invalid",
+                "dedicated Minecraft workload account is missing or inconsistent",
+            )
+        group = self._runner.run(
+            ("getent", "group", self._workload_user),
+            timeout=10,
+        )
+        group_fields = group.stdout.strip().split(":")
+        if (
+            group.returncode != 0
+            or len(group_fields) != 4
+            or group_fields[0] != self._workload_user
+            or group_fields[2] != str(self._workload_gid)
+        ):
+            raise HostActionError(
+                "minecraft_identity_invalid",
+                "dedicated Minecraft workload group is missing or inconsistent",
+            )
+        try:
+            os.chown(data, self._workload_uid, self._workload_gid)
+            data.chmod(0o700)
+        except OSError as error:
+            raise HostActionError(
+                "minecraft_data_ownership_failed",
+                "could not apply Minecraft data directory ownership",
+            ) from error
+        for path in (data, *sorted(data.rglob("*"))):
+            if path == data / RESTORE_MARKER:
+                continue
+            if path != data and (path.is_symlink() or not (path.is_dir() or path.is_file())):
+                raise HostActionError(
+                    "unsafe_data_path",
+                    "Minecraft data contains a symlink or special file",
+                )
+            try:
+                metadata = path.stat(follow_symlinks=False)
+            except OSError as error:
+                raise HostActionError(
+                    "minecraft_data_ownership_invalid",
+                    "could not inspect Minecraft data ownership",
+                ) from error
+            if metadata.st_uid != self._workload_uid or metadata.st_gid != self._workload_gid:
+                relative = "." if path == data else path.relative_to(data).as_posix()
+                raise HostActionError(
+                    "minecraft_data_ownership_invalid",
+                    f"Minecraft data entry {relative!r} is owned by "
+                    f"{metadata.st_uid}:{metadata.st_gid}; expected "
+                    f"{self._workload_uid}:{self._workload_gid}",
+                )
 
     def _restic_environment(
         self, lease: Mapping[str, object], *, required_permission: str
@@ -711,6 +815,8 @@ class HostRuntime:
         paper_build: str,
         memory: str,
         data: Path,
+        workload_uid: int,
+        workload_gid: int,
     ) -> str:
         return (
             "[Unit]\n"
@@ -724,6 +830,9 @@ class HostRuntime:
             f"Volume={data}:/data\n"
             "PublishPort=25565:25565/tcp\n"
             "Environment=EULA=TRUE\n"
+            f"Environment=UID={workload_uid}\n"
+            f"Environment=GID={workload_gid}\n"
+            "Environment=SKIP_CHOWN_DATA=TRUE\n"
             "Environment=TYPE=PAPER\n"
             f"Environment=VERSION={minecraft_version}\n"
             f"Environment=PAPER_BUILD={paper_build}\n"

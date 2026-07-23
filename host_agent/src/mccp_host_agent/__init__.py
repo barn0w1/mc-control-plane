@@ -1,4 +1,4 @@
 """Debian 13 Host agent with no third-party runtime dependencies."""
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 PROTOCOL_VERSION = 1

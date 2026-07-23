@@ -120,6 +120,24 @@ umask 077
 install -d -m 0700 /var/lib/mc-control-plane-agent
 install -d -m 0700 /var/lib/mc-control-plane-data
 install -d -m 0755 /etc/containers/systemd
+workload_user=mccp-minecraft
+workload_uid=2000
+workload_gid=2000
+if getent group "$workload_user" >/dev/null; then
+    test "$(getent group "$workload_user" | cut -d: -f3)" = "$workload_gid"
+else
+    ! getent group "$workload_gid" >/dev/null
+    groupadd --gid "$workload_gid" "$workload_user"
+fi
+if getent passwd "$workload_user" >/dev/null; then
+    test "$(id -u "$workload_user")" = "$workload_uid"
+    test "$(id -g "$workload_user")" = "$workload_gid"
+else
+    ! getent passwd "$workload_uid" >/dev/null
+    useradd --uid "$workload_uid" --gid "$workload_gid" --home-dir /nonexistent \
+        --no-create-home --shell /usr/sbin/nologin --password '!' "$workload_user"
+fi
+test "$(getent passwd "$workload_user" | cut -d: -f7)" = /usr/sbin/nologin
 python_version=$(python3 -c 'import platform; print(platform.python_version())')
 podman_version=$(podman --version)
 restic_version=$(restic version)

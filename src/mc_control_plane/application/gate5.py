@@ -24,6 +24,7 @@ _DIGEST_IMAGE = re.compile(r"^[a-z0-9][a-z0-9._:/-]+@sha256:[0-9a-f]{64}$")
 _MINECRAFT_VERSION = re.compile(r"^[0-9]+\.[0-9]+(?:\.[0-9]+)?$")
 _PAPER_BUILD = re.compile(r"^[1-9][0-9]*$")
 _MEMORY = re.compile(r"^[1-9][0-9]*(?:M|G)$")
+_COMMAND_HEARTBEAT_SECONDS = 60.0
 
 
 class Gate5Error(Exception):
@@ -397,14 +398,19 @@ def _command(
         now=clock.now(),
     )
     report(f"queued {kind.value}: command={command_id}")
-    deadline = monotonic() + timeout
+    started_at = monotonic()
+    deadline = started_at + timeout
     last_state: str | None = None
+    last_report_at = started_at - _COMMAND_HEARTBEAT_SECONDS
     while monotonic() < deadline:
         command = store.get_command(command_id)
         state = "absent" if command is None else command.state.value
-        if state != last_state:
-            report(f"command poll: command={command_id} state={state}")
+        observed_at = monotonic()
+        if state != last_state or observed_at - last_report_at >= _COMMAND_HEARTBEAT_SECONDS:
+            elapsed = int(observed_at - started_at)
+            report(f"command poll: command={command_id} state={state} elapsed={elapsed}s")
             last_state = state
+            last_report_at = observed_at
         if command is not None and command.state is HostCommandState.SUCCEEDED:
             result = command.result or {}
             observation = result.get("observation")

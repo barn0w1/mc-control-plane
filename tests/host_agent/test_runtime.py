@@ -1,4 +1,5 @@
 import json
+import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -23,6 +24,8 @@ class FakeRunner:
         self.restic_environments: list[Mapping[str, str]] = []
         self.cwds: list[Path | None] = []
         self.existing_snapshot_id: str | None = None
+        self.workload_identity_valid = True
+        self.minecraft_start_returncode = 0
 
     def run(
         self,
@@ -62,6 +65,18 @@ class FakeRunner:
             target.mkdir(parents=True, exist_ok=True)
             (target / "gate4-fixture.json").write_text('{"gate":4,"revision":"initial"}\n')
             return CompletedCommand(0, "", "")
+        if values == ("getent", "passwd", "mccp-minecraft"):
+            if not self.workload_identity_valid:
+                return CompletedCommand(2, "", "not found")
+            return CompletedCommand(
+                0,
+                f"mccp-minecraft:!:{os.getuid()}:{os.getgid()}::/nonexistent:/usr/sbin/nologin\n",
+                "",
+            )
+        if values == ("getent", "group", "mccp-minecraft"):
+            if not self.workload_identity_valid:
+                return CompletedCommand(2, "", "not found")
+            return CompletedCommand(0, f"mccp-minecraft:x:{os.getgid()}:\n", "")
         if values[:3] == ("systemctl", "show", "--property=LoadState"):
             unit = values[-1]
             if unit == "mccp-host-agent.service":
@@ -82,6 +97,12 @@ class FakeRunner:
             )
         if values[:2] == ("systemctl", "start"):
             if values[-1] == "mccp-minecraft.service":
+                if self.minecraft_start_returncode:
+                    return CompletedCommand(
+                        self.minecraft_start_returncode,
+                        "",
+                        "Minecraft start timed out",
+                    )
                 self.minecraft_state = "active"
                 self.minecraft_container_status = "running"
                 self.minecraft_health = "healthy"
@@ -109,6 +130,8 @@ class FakeRunner:
                 ),
                 "",
             )
+        if values[:3] == ("podman", "logs", "--tail"):
+            return CompletedCommand(0, "[init] useful startup detail\n", "")
         if values[:2] == ("podman", "pause"):
             self.minecraft_paused = True
         if values[:2] == ("podman", "unpause"):
@@ -182,6 +205,8 @@ def test_minecraft_quadlet_is_pinned_and_health_gated(tmp_path: Path) -> None:
         generator=Path("/generator"),
         run_id="run-1",
         data_root=tmp_path / "data",
+        workload_uid=os.getuid(),
+        workload_gid=os.getgid(),
     )
 
     result = runtime.apply_minecraft(
@@ -196,6 +221,10 @@ def test_minecraft_quadlet_is_pinned_and_health_gated(tmp_path: Path) -> None:
     assert len(result["revision"]) == 64
     installed = (quadlets / "mccp-minecraft.container").read_text()
     assert f"Image={MINECRAFT_IMAGE}" in installed
+    assert "User=0:0" not in installed
+    assert f"Environment=UID={os.getuid()}" in installed
+    assert f"Environment=GID={os.getgid()}" in installed
+    assert "Environment=SKIP_CHOWN_DATA=TRUE" in installed
     assert "Environment=TYPE=PAPER" in installed
     assert "Environment=VERSION=1.21.8" in installed
     assert "Environment=PAPER_BUILD=42" in installed
@@ -215,6 +244,33 @@ def test_minecraft_quadlet_is_pinned_and_health_gated(tmp_path: Path) -> None:
     ) in runner.calls
 
 
+def test_minecraft_apply_rejects_missing_workload_identity(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    runner.workload_identity_valid = False
+    runtime = HostRuntime(
+        IMAGE,
+        runner=runner,
+        quadlet_directory=tmp_path / "quadlets",
+        generator=Path("/generator"),
+        run_id="run-1",
+        data_root=tmp_path / "data",
+        workload_uid=os.getuid(),
+        workload_gid=os.getgid(),
+    )
+
+    with pytest.raises(HostActionError) as captured:
+        runtime.apply_minecraft(
+            image=MINECRAFT_IMAGE,
+            minecraft_version="1.21.8",
+            paper_build="42",
+            memory="512M",
+            eula=True,
+        )
+
+    assert captured.value.code == "minecraft_identity_invalid"
+    assert not (tmp_path / "quadlets" / "mccp-minecraft.container").exists()
+
+
 def test_minecraft_lifecycle_and_live_snapshot_are_consistent(tmp_path: Path) -> None:
     runner = FakeRunner()
     runner.repository_exists = True
@@ -225,6 +281,8 @@ def test_minecraft_lifecycle_and_live_snapshot_are_consistent(tmp_path: Path) ->
         generator=Path("/generator"),
         run_id="run-1",
         data_root=tmp_path / "data",
+        workload_uid=os.getuid(),
+        workload_gid=os.getgid(),
     )
     runtime.apply_minecraft(
         image=MINECRAFT_IMAGE,
@@ -256,6 +314,35 @@ def test_minecraft_lifecycle_and_live_snapshot_are_consistent(tmp_path: Path) ->
     assert runner.calls.index(save_off) < runner.calls.index(flush)
     assert runner.calls.index(flush) < runner.calls.index(pause) < backup_index
     assert backup_index < runner.calls.index(unpause) < runner.calls.index(save_on)
+
+
+def test_minecraft_start_failure_includes_bounded_diagnostics(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    runner.minecraft_start_returncode = 1
+    runtime = HostRuntime(
+        IMAGE,
+        runner=runner,
+        quadlet_directory=tmp_path / "quadlets",
+        generator=Path("/generator"),
+        run_id="run-1",
+        data_root=tmp_path / "data",
+        workload_uid=os.getuid(),
+        workload_gid=os.getgid(),
+    )
+    runtime.apply_minecraft(
+        image=MINECRAFT_IMAGE,
+        minecraft_version="1.21.8",
+        paper_build="42",
+        memory="512M",
+        eula=True,
+    )
+
+    with pytest.raises(HostActionError) as captured:
+        runtime.start_minecraft()
+
+    assert captured.value.code == "minecraft_start_failed"
+    assert "diagnostics=" in str(captured.value)
+    assert "useful startup detail" in str(captured.value)
 
 
 def test_live_snapshot_recovers_a_previously_paused_minecraft(tmp_path: Path) -> None:

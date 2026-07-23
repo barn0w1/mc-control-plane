@@ -33,6 +33,11 @@ def test_cloud_init_installs_fixed_host_baseline_without_logging_secret() -> Non
     assert 'test "$actual" = ' + "b" * 64 in rendered
     assert 'test "$installed" = 0.1.0' in rendered
     assert "ExecStart=/opt/mccp-host-agent/bin/mccp-host-agent" in rendered
+    assert "workload_user=mccp-minecraft" in rendered
+    assert "workload_uid=2000" in rendered
+    assert "workload_gid=2000" in rendered
+    assert "--shell /usr/sbin/nologin" in rendered
+    assert "--password '!'" in rendered
     assert "one-time-secret" not in rendered
 
     encoded = re.search(r"content: ([A-Za-z0-9+/=]+)\n  - path: /etc/systemd", rendered)
