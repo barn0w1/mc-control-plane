@@ -17,7 +17,7 @@ def _ready(run_id: str, clock: MutableClock) -> HostObservation:
         run_id=run_id,
         agent_id=f"agent-{run_id}",
         protocol_version=1,
-        agent_version="0.3.3",
+        agent_version="0.3.4",
         status="connected",
         boot_id="boot-1",
         capabilities={

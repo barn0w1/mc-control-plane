@@ -90,6 +90,16 @@ def run_gate5_minecraft_lifecycle(
         sleeper,
         report,
     )
+    _verify_host_runtime(
+        store,
+        first_agent,
+        server_unit_id,
+        clock,
+        timeout_seconds,
+        poll_seconds,
+        sleeper,
+        report,
+    )
     _command(
         store,
         first_agent,
@@ -175,6 +185,16 @@ def run_gate5_minecraft_lifecycle(
         ids,
         server_unit_id,
         stop_id,
+        timeout_seconds,
+        poll_seconds,
+        sleeper,
+        report,
+    )
+    _verify_host_runtime(
+        store,
+        second_agent,
+        server_unit_id,
+        clock,
         timeout_seconds,
         poll_seconds,
         sleeper,
@@ -386,7 +406,11 @@ def _command(
     report: Callable[[str], None],
 ) -> dict[str, Any]:
     command_id = f"gate5-{uuid4().hex}"
-    payload = {"server_unit_id": server_unit_id, **extra_payload}
+    payload = (
+        extra_payload
+        if kind is HostCommandKind.INSPECT_HOST
+        else {"server_unit_id": server_unit_id, **extra_payload}
+    )
     store.queue_command(
         command_id=command_id,
         agent_id=agent_id,
@@ -425,6 +449,37 @@ def _command(
             raise Gate5Error(f"Host command {kind.value} failed: {command.result}")
         sleeper(poll)
     raise Gate5Error(f"Host command {kind.value} did not complete before timeout")
+
+
+def _verify_host_runtime(
+    store: HostProtocolStore,
+    agent_id: str,
+    server_unit_id: str,
+    clock: Clock,
+    timeout: float,
+    poll: float,
+    sleeper: Callable[[float], None],
+    report: Callable[[str], None],
+) -> None:
+    observation = _command(
+        store,
+        agent_id,
+        server_unit_id,
+        HostCommandKind.INSPECT_HOST,
+        {},
+        clock,
+        timeout,
+        poll,
+        sleeper,
+        report,
+    )
+    states = observation.get("service_states")
+    if not isinstance(states, dict) or states.get("minecraft") == "unknown":
+        raise Gate5Error("fresh Host cannot observe the rootful Podman runtime")
+    capabilities = observation.get("capabilities")
+    if not isinstance(capabilities, dict) or not isinstance(capabilities.get("podman"), str):
+        raise Gate5Error("fresh Host omitted its Podman capability")
+    report("fresh Host Podman preflight passed")
 
 
 def _commit_snapshot(

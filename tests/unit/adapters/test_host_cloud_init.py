@@ -36,16 +36,12 @@ def test_cloud_init_installs_fixed_host_baseline_without_logging_secret() -> Non
     assert "workload_user=mccp-minecraft" in rendered
     assert "workload_uid=1000" in rendered
     assert "workload_gid=1000" in rendered
-    assert "install -d -m 0700 /var/lib/containers" in rendered
-    assert "install -d -m 0700 /run/containers" in rendered
-    assert "install -d -m 0700 /run/libpod" in rendered
-    assert "install -d -m 0700 /run/crun" in rendered
-    assert "path: /etc/tmpfiles.d/mccp-podman-runtime.conf" in rendered
-    assert "d /run/containers 0700 root root -" in rendered
-    assert "d /run/libpod 0700 root root -" in rendered
-    assert "d /run/crun 0700 root root -" in rendered
-    assert "ReadWritePaths=/var/lib/containers /run/containers /run/libpod /run/crun" in rendered
-    assert "ProtectSystem=strict" in rendered
+    assert "path: /etc/tmpfiles.d/mccp-podman-runtime.conf" not in rendered
+    assert "ReadWritePaths=" not in rendered
+    assert "ProtectSystem=" not in rendered
+    assert "ProtectHome=" not in rendered
+    assert "PrivateTmp=" not in rendered
+    assert "NoNewPrivileges=yes" in rendered
     assert "--shell /usr/sbin/nologin" in rendered
     assert "--password '!'" in rendered
     assert "one-time-secret" not in rendered

@@ -6,7 +6,7 @@ from enum import StrEnum
 from typing import Any
 
 HOST_PROTOCOL_VERSION = 1
-HOST_AGENT_VERSION = "0.3.3"
+HOST_AGENT_VERSION = "0.3.4"
 HOST_AGENT_ARTIFACT_PATH = f"/artifacts/mccp-host-agent-{HOST_AGENT_VERSION}.whl"
 
 
