@@ -257,6 +257,10 @@ flowchart TD
     S -- Yes --> T["Run active"]
 ```
 
+現在の通常`server-unit-start`と永続`StartWorkflow`が担当するのは、Linode作成、Host enrollment、
+capability確認を経てHost readyへ到達するところまでです。restore、Quadlet適用、Minecraft起動は
+Gate 5 acceptance harnessで一周を実証済みですが、通常運用の永続stepへはまだ接続していません。
+
 ## 8. Stop workflow
 
 ```mermaid
@@ -280,9 +284,13 @@ flowchart TD
 
 新しいsnapshotの作成に失敗した状態でLinodeを削除しません。限定回数のretryで解決しなければ、手動確認が可能な`blocked`へ移行します。
 
+この順序はGate 5 acceptance harnessで実機検証済みです。通常の`server-unit-stop` commandと永続Stop
+Operationは未実装であり、次段ではこの検証済みprimitiveをproduct workflowへ移す必要があります。
+
 ## 9. 実行中の手動snapshot
 
-Gate 5では、任意のタイミングで呼べる安全な手動snapshot primitiveを実装します。scheduleを持つ
+Gate 5で、任意のタイミングで呼べる安全な手動snapshot primitiveを実装し、実機検証しました。
+scheduleを持つ
 定期snapshotは、間隔、失敗表示、retentionとの関係が未確定なため別の後続計画とします。
 
 実行中ファイルを無条件に読むのではなく、Host agentの一つの固定command内でRCON `save-off`、

@@ -2,10 +2,9 @@
 
 ## Status
 
-**Implementation revised / live acceptance pending**（2026-07-23）。自動testでは、Paper Quadletの
-生成前検証、固定version、health-based readiness、graceful stop、実行中snapshotのquiesce/resume、
-中断後のpause復旧、Host command再配送、snapshot種別を確認している。実accountでの2台のfresh
-Linodeを使うcheckが成功し、project ownerが結果を確認した時点でCompleteとする。
+**Complete**（2026-07-23）。自動testに加え、project ownerが実accountで2台のfresh Linodeを使い、
+Paper readiness、実行中snapshot、graceful stop、停止後snapshot、fresh Host restore、再起動、
+最終cleanupまで確認した。
 
 Gate 5はMinecraftの基礎的なworkload lifecycleを、Gate 1から4で完成したInfra、Host、Dataの上へ
 載せる。Minecraft設定、plugin、定期snapshot、retentionは扱わない。
@@ -246,6 +245,35 @@ uv run mc-control-plane linode-gate3-cleanup \
   --ssh-public-key ~/.ssh/akamai_ed25519.pub \
   --confirm-owned-delete
 ```
+
+## Live acceptance結果
+
+2026-07-23にagent 0.3.4で最終checkを実施し、次の成功行を得た。
+
+```text
+paper=ready live-snapshot=quiesced graceful-stop=passed fresh-host-restore=passed restart=passed cleanup=confirmed
+```
+
+| 項目 | Run A | Run B |
+| --- | --- | --- |
+| Run ID | `14021678-b21f-441f-afd5-184d7233c213` | `bf1f9fc8-4ddc-46a8-9ee4-414b03354782` |
+| Linode resource | `101185561` | `101185797` |
+| Paper ready | `healthy`、115秒 | restore後`healthy`、80秒 |
+| stop snapshot | `2b6ade799f0d4f8042afa3702bc775b4dea49ae9cc8799271e75c692a9b33c4d` | `5945381250d1f4ca7d8f1ec3c523d17bbe73ea061c2912d6ba70a6a293074204` |
+| cleanup | absent確認 | absent確認、tag検索0件 |
+
+Run Aの実行中manual snapshotは
+`07bb98156e09c7dbb0c0af1e7972b8af77ac1ce52845a05b8bbe98fd79dc2748`だった。Run Aの停止後snapshotは
+content SHA-256 `ef786e4bf615c948bef0ce65ed06c37d5ca2f1ae7be34679702fc025d9741f41`、
+187 filesであり、Run Bのfresh restoreでも同じdigestとfile countを確認した。これにより、
+snapshot recordの存在だけでなく復元内容の一致も検証した。
+
+Run Bの最終snapshotがRun Aと異なるのは、restore後にPaperを再起動・停止してdataが更新されたためで
+正常である。最後の削除ではtag検索が一度だけ1件を返した後、次のpollで0件になった。provider側の削除
+反映遅延をbounded pollで吸収し、cleanupを確定できた。
+
+この結果により、Gate 5の全acceptance criteriaを満たした。Gate 1から5までの技術基盤checkpointは
+完了したが、通常運用の個別Start/Stop/Snapshot Operationは後続作業である。
 
 ## Gate 5に含めないもの
 
