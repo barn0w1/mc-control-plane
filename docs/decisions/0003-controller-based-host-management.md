@@ -18,7 +18,7 @@ Host controllerはdaemon稼働中に継続責任を持つnon-terminating control
 `Host`はControl Planeが所有する論理identityとし、provider resource IDから分離します。
 Claimの削除はHostの直接削除命令ではありません。Host subsystemが解放後の再利用または削除を管理します。
 
-Host layerはAkamai Cloud nativeとして設計します。汎用provider plugin systemは作らず、責務分離とfake testのためにAkamai固有のprivate infrastructure boundaryだけを持ちます。詳細はADR-0010と[Host management direction](../host-management-direction.md)に記録します。
+Host layerはAkamai Cloud nativeとして設計します。汎用provider plugin systemは作らず、責務分離とfake testのためにAkamai固有のprivate infrastructure boundaryだけを持ちます。詳細はADR-0010と[Host Control System v1 architecture](../checkpoints/host-control-v1/architecture.md)に記録します。
 
 ## Consequences
 
