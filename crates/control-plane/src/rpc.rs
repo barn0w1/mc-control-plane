@@ -67,14 +67,14 @@ impl Drop for SocketPathGuard {
         if identity != self.identity {
             return;
         }
-        if let Err(error) = std::fs::remove_file(&self.path) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(
-                    socket = %self.path.display(),
-                    error = ?error,
-                    "failed to remove owned local RPC socket"
-                );
-            }
+        if let Err(error) = std::fs::remove_file(&self.path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                socket = %self.path.display(),
+                error = ?error,
+                "failed to remove owned local RPC socket"
+            );
         }
     }
 }

@@ -441,6 +441,7 @@ impl Storage {
         host_record_from_row(&row).map_err(internal)
     }
 
+    #[cfg(test)]
     pub async fn get_host_for_claim(
         &self,
         claim_id: HostClaimId,

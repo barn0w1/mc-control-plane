@@ -254,21 +254,21 @@ where
     ) -> Result<ReconcileResult, AppError> {
         match self.provider.observe(host.resource.id).await {
             Ok(ProviderObservation::Present(resource)) => {
-                if let Some(expected) = host.resource.status.provider_resource_id.clone() {
-                    if expected != resource.id {
-                        mark_host_failed(
-                            &mut claim,
-                            &mut host,
-                            "ProviderOwnershipConflict",
-                            format!(
-                                "Host recorded provider resource {expected}, but ownership lookup returned {}.",
-                                resource.id
-                            ),
-                        );
-                        self.storage.save_host(&host).await?;
-                        self.persist_claim_status(&claim).await?;
-                        return Ok(ReconcileResult::Progress);
-                    }
+                if let Some(expected) = host.resource.status.provider_resource_id.clone()
+                    && expected != resource.id
+                {
+                    mark_host_failed(
+                        &mut claim,
+                        &mut host,
+                        "ProviderOwnershipConflict",
+                        format!(
+                            "Host recorded provider resource {expected}, but ownership lookup returned {}.",
+                            resource.id
+                        ),
+                    );
+                    self.storage.save_host(&host).await?;
+                    self.persist_claim_status(&claim).await?;
+                    return Ok(ReconcileResult::Progress);
                 }
 
                 let unchanged = provider_observation_is_stable(&host, &resource);
@@ -363,22 +363,22 @@ where
                 Ok(ReconcileResult::Progress)
             }
             Ok(ProviderObservation::Present(resource)) => {
-                if let Some(expected) = host.resource.status.provider_resource_id.clone() {
-                    if expected != resource.id {
-                        mark_host_failed(
-                            &mut claim,
-                            &mut host,
-                            "ProviderOwnershipConflict",
-                            format!(
-                                "Host recorded provider resource {expected}, but ownership lookup returned {}.",
-                                resource.id
-                            ),
-                        );
-                        host.retry.next_reconcile_at_unix_ms = Some(i64::MAX);
-                        self.storage.save_host(&host).await?;
-                        self.persist_claim_status(&claim).await?;
-                        return Ok(ReconcileResult::Progress);
-                    }
+                if let Some(expected) = host.resource.status.provider_resource_id.clone()
+                    && expected != resource.id
+                {
+                    mark_host_failed(
+                        &mut claim,
+                        &mut host,
+                        "ProviderOwnershipConflict",
+                        format!(
+                            "Host recorded provider resource {expected}, but ownership lookup returned {}.",
+                            resource.id
+                        ),
+                    );
+                    host.retry.next_reconcile_at_unix_ms = Some(i64::MAX);
+                    self.storage.save_host(&host).await?;
+                    self.persist_claim_status(&claim).await?;
+                    return Ok(ReconcileResult::Progress);
                 }
 
                 host.resource.status.phase = HostPhase::Deleting;
