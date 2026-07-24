@@ -20,7 +20,7 @@ use hyper_util::{
     service::TowerToHyperService,
 };
 use jsonrpsee::{
-    Methods, NotifyMsg, RpcModule,
+    MethodResponse, Methods, RpcModule,
     core::middleware::{Batch, Notification, Request, RpcServiceBuilder, RpcServiceT},
     server::{BatchRequestConfig, Server, ServerConfig, stop_channel},
 };
@@ -239,10 +239,10 @@ struct RejectNotifications<S> {
 
 impl<S> RpcServiceT for RejectNotifications<S>
 where
-    S: RpcServiceT<NotificationResponse = NotifyMsg> + Clone + Send + Sync + 'static,
+    S: RpcServiceT<NotificationResponse = MethodResponse> + Clone + Send + Sync + 'static,
 {
     type MethodResponse = S::MethodResponse;
-    type NotificationResponse = NotifyMsg;
+    type NotificationResponse = MethodResponse;
     type BatchResponse = S::BatchResponse;
 
     fn call<'a>(
@@ -264,7 +264,7 @@ where
         notification: Notification<'a>,
     ) -> impl Future<Output = Self::NotificationResponse> + Send + 'a {
         tracing::warn!(method = %notification.method_name(), "rejected JSON-RPC notification");
-        std::future::ready(NotifyMsg::Err)
+        std::future::ready(MethodResponse::notification())
     }
 }
 

@@ -319,7 +319,7 @@ impl Storage {
         }
 
         let now = now_timestamp();
-        let host = initial_host(HostId::new(), claim_id, resources, now);
+        let host = initial_host(HostId::new(), claim_id, resources.clone(), now);
         let insert = sqlx::query(
             r#"
             INSERT INTO hosts (

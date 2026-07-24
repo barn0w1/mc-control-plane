@@ -254,7 +254,7 @@ where
     ) -> Result<ReconcileResult, AppError> {
         match self.provider.observe(host.resource.id).await {
             Ok(ProviderObservation::Present(resource)) => {
-                if let Some(expected) = host.resource.status.provider_resource_id.as_deref() {
+                if let Some(expected) = host.resource.status.provider_resource_id.clone() {
                     if expected != resource.id {
                         mark_host_failed(
                             &mut claim,
@@ -359,7 +359,7 @@ where
                 Ok(ReconcileResult::Progress)
             }
             Ok(ProviderObservation::Present(resource)) => {
-                if let Some(expected) = host.resource.status.provider_resource_id.as_deref() {
+                if let Some(expected) = host.resource.status.provider_resource_id.clone() {
                     if expected != resource.id {
                         mark_host_failed(
                             &mut claim,
