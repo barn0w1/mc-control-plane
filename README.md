@@ -1,40 +1,36 @@
 # mc-control-plane
 
-Minecraft server automationのためのControl Planeを、Rustで新しく設計・実装するprojectです。
+Hostを起点としたresource automationのControl Planeを、Rustで新しく構築するprojectです。
+repository名には歴史的にMinecraftが含まれていますが、systemとbinaryの名称には用途を無理に含めません。
 
-現在は実装開始前のfoundation設計段階です。既存のPython実装を互換対象として移植するのではなく、
-実装と実環境検証から得られた知見を参考にしながら、概念、責務、protocol、failure modelを整理し直します。
+現在は、既存のPython prototypeを移植する段階ではありません。prototypeから得たfailure caseと有効だった設計を参考にしつつ、
+新しいresource modelとcontrol loopを小さく実装して検証します。
 
-## 目標とする構成
+## Names
 
-```mermaid
-flowchart LR
-    CLI["mccpctl"] -->|"RPC"| CP["mccpd"]
-    Other["future interfaces"] -->|"RPC"| CP
-    Hostd["mccp-hostd"] -->|"outbound RPC / mTLS"| CP
-    CP --> Linode["Akamai Cloud / Linode"]
-    Hostd --> Host["Host resources and workloads"]
-```
+| Role | Name |
+| --- | --- |
+| System | **Control Plane** |
+| Central daemon | `control-plane` |
+| Host-resident daemon | `host-agent` |
+| Operator CLI | `control` |
+| Persistent Host demand | `HostClaim` |
 
-- `mccpd`: state、controller、provider integration、identityを所有する単一のRust daemon
-- `mccp-hostd`: 各Hostに常駐し、Hostを観測・制御するRust daemon
-- `mccpctl`: `mccpd`だけを操作するRPC client
-- 将来のDiscord BotやWeb interfaceも、同じRPC APIを利用するclient
+repository名は引き続き`mc-control-plane`を使用します。
 
-## 現在のcheckpoint
+## Current goal
 
-中期checkpointは、Minecraft workloadを載せる前に、Hostを一つの独立したresource layerとして
-完全に管理できる状態を作ることです。
+中期目標は、Host layerをControl Planeだけで完全に管理できることです。
 
-- 上位layerが`HostClaim`を提示できる
-- Host subsystemが必要なHostを確保する
-- `mccp-hostd`が安全にenrollし、mTLSで`mccpd`と通信する
-- Hostのidentity、provider resource、allocation、observed stateを一貫して管理する
-- Claim解放後にHostをidleで保持し、policyに従って再利用または削除する
-- process restartや通信断から安全に再開する
-- 通常操作にSSHやprovider consoleを必要としない
+- clientが`HostClaim`を作成・削除できる
+- controllerが必要なHost数へ自動的に収束する
+- Hostのidentityとprovider resourceをControl Planeが管理する
+- Claim解放後の再利用または削除をHost subsystemが判断する
+- daemonやHostの再起動、通信断、provider APIの不確実な結果から安全に再開する
+- 通常操作は`control`からRPCを通じて行い、databaseやproviderを直接操作しない
 
-詳細は[Host control checkpoint](docs/plans/checkpoint-host-control.md)を参照してください。
+最初の実装では、LinodeやHostとの通信へ進む前に、local RPC、SQLite、`HostClaim`、`Host`、
+fake providerによるreconciliationを成立させます。
 
 ## Documentation
 
@@ -42,13 +38,5 @@ flowchart LR
 
 ## Python prototype
 
-以前のPython実装は作業ツリーから削除しました。履歴はGitに残っており、
-`python-prototype-reference-2026-07-23` tagから参照できます。
-
-旧実装は互換対象ではありません。引き継ぐ知見は
-[Python prototypeから得た知見](docs/history/python-prototype.md)に整理しています。
-
-## Development status
-
-現在のbranchにはRust実装をまだ追加していません。次の段階でCargo workspaceと最小のdaemon/clientを作成します。
-Rust toolchainの選定、build、format、lint、testの実行結果は実装開始後に文書化します。
+旧Python実装はGit履歴と`python-prototype-reference-2026-07-23` tagから参照できます。
+後方互換性や移行経路は提供しません。

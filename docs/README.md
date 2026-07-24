@@ -1,37 +1,22 @@
 # Documentation
 
-このdirectoryは、新しいRust実装に対する設計上の正本です。
-コードと文書が食い違う場合は、実装開始後はcodeとacceptance testを優先し、差異を文書へ戻します。
+このdirectoryは、現在の設計判断と直近の実装計画の正本です。
+将来の実装詳細を早期に固定せず、実装を始める直前に必要な判断だけを追加します。
 
-## Specification
+## Current documents
 
-- [Architecture](specification/architecture.md)
-- [Resource model](specification/resource-model.md)
-- [Controller and claim model](specification/controller-model.md)
-- [Host management](specification/host-management.md)
-- [RPC protocol](specification/rpc.md)
-- [Identity and PKI](specification/identity-and-pki.md)
-- [Persistence and consistency](specification/persistence.md)
-- [Failure model](specification/failure-model.md)
-- [Security model](specification/security.md)
-- [Terminology](specification/terminology.md)
-
-## Plans
-
-- [Roadmap](plans/roadmap.md)
-- [Host control checkpoint](plans/checkpoint-host-control.md)
-- [Implementation sequence](plans/implementation-sequence.md)
-- [Validation strategy](plans/validation-strategy.md)
-- [Open questions](plans/open-questions.md)
-
-## Decisions
-
-- [ADR index](decisions/README.md)
-
-ADRは採用した判断と、その時点での理由を記録します。検討中の事項は`Proposed`とし、
-実装前に必ず確定させる必要はありません。判断を変更するときは過去のADRを書き換えて歴史を消すのではなく、
-新しいADRで`Superseded`にします。
-
-## History
-
+- [Project direction](project-direction.md)
+- [Host control milestone](host-control-milestone.md)
+- [First implementation plan](first-implementation-plan.md)
+- [Terminology](terminology.md)
+- [Open questions](open-questions.md)
+- [Architecture Decision Records](decisions/README.md)
 - [Python prototypeから得た知見](history/python-prototype.md)
+
+## Documentation rules
+
+- codeとtestが文書と矛盾した場合、開発中はcodeとtestを事実として文書を更新する
+- 実装していない構想を完成した仕様のように書かない
+- 実装詳細は、その実装を開始する直前に決める
+- 既存の標準、protocol、libraryで十分な場合は独自仕様を作らない
+- stable releaseまでは後方互換性を設計上の制約にしない
