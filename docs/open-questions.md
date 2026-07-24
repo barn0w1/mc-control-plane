@@ -17,12 +17,17 @@ fake provider fault injectionは、最初の実装ではtest-only APIとしてCo
 
 ## Before Linode integration
 
+Akamai Cloudを正式な実providerとし、runtimeで差し替える汎用provider plugin systemは作りません。fake testのためのprivate infrastructure boundaryだけを残します。方向は[Host management direction](host-management-direction.md)を参照してください。
+
+実装前に決める事項:
+
 - official SDK、generated client、direct HTTP clientのどれを使用するか
 - allowed plan family/type policyをconfigurationでどう表現するか
 - system reserved CPU、memory、storageの初期値
-- ownership metadataとresource discoveryをLinode tag/labelへどう符号化するか
-- create/deleteの`OutcomeUnknown`をどのprovider observationで解決するか
+- ownership metadataとresource discoveryをLinode label/tagへどう符号化するか
+- bounded convergence windowとcleanup deadline
 - Linode type catalogとpriceをどの頻度でrefreshするか
+- account-level ownership inventoryをどのintervalで実行するか
 
 ## Before host-agent communication
 
