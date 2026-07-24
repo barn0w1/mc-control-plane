@@ -1,0 +1,16 @@
+[package]
+name = "host-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+control-plane-protocol = { path = "../control-plane-protocol" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

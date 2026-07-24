@@ -18,6 +18,33 @@ control-plane
 
 詳細なlibraryとtransportの選択は[Implementation foundation](implementation-foundation.md)、resource shapeは[HostClaim specification](host-claim-spec.md)を正本とします。
 
+## Implementation status
+
+この計画の最初の実装はcodeとして追加済みです。ただし、Rust toolchainを使用できない環境で作成したため、現時点では**implementation candidate**です。
+Rust 1.97.1環境で次を通し、発見したAPI差異やlintを修正した時点でverifiedとします。
+
+```text
+cargo fmt --all -- --check
+cargo check --workspace --all-targets
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+```
+
+現在実装されている範囲:
+
+- Step 1のworkspace、binary skeleton、shutdown、diagnostics
+- Step 2のtyped `system.info`、HTTP/2 Unix socket client/server、request size、timeout、batch/notification拒否
+- Step 3のembedded migration、single-connection SQLite、HostClaim/Host persistence、独立fake provider database
+- Step 4のHostClaim/Host RPCとCLI
+- Step 5のsingle-worker reconciliationと主要fault test
+
+local verification後に残る作業:
+
+- `Cargo.lock`を生成してcommitする
+- SQLx checked queryへ段階的に移行し、必要なoffline metadataをcommitする
+- `POST /rpc`以外がtransport layerで確実に拒否されることをconformance testで確認し、必要ならHTTP middlewareを追加する
+- malformed HTTP/JSON-RPCとsocket permissionのintegration testを追加する
+
 ## Initial workspace
 
 ```text

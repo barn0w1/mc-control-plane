@@ -1,0 +1,28 @@
+[package]
+name = "control-plane"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+control-plane-protocol = { path = "../control-plane-protocol" }
+hyper.workspace = true
+hyper-util.workspace = true
+jiff.workspace = true
+jsonrpsee.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tower.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true

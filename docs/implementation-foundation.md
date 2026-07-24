@@ -124,8 +124,9 @@ RPCのrequest identityと、永続resourceのidentityは別のUUIDです。
 - machine-readableなapplication error dataには安定した`kind`とresource IDを含める
 - human-readable messageをclient logicの条件分岐に使用しない
 
-`jsonrpsee`のproc macroを使用してserver/client API traitを定義します。
+最初の実装では、wire structを`control-plane-protocol`へ置き、server methodを`RpcModule`へ明示的に登録します。
 Unix socket transportに必要なconnection codeはtransport moduleへ閉じ込め、JSON-RPC parserやdispatcherは再実装しません。
+proc macroによるAPI生成は、method数が増えて重複削減の効果が明確になった時点で再評価します。
 
 ## SQLite and SQLx
 
@@ -176,9 +177,10 @@ WALはreaderとwriterの並行性とrestart recoveryを提供します。Control
 - migrationは`control-plane` binaryへembedし、listener開始前に適用する
 - stable release前はmigrationの後方互換性を保証しない
 - schemaを作り直す破壊的migrationを許容する
-- production queryには可能な限りSQLx checked macroを使用する
-- `.sqlx` offline metadataをrepositoryへcommitする
-- dynamic SQLが本当に必要な箇所以外ではunchecked queryを避ける
+- 最初のimplementation candidateはruntime query APIでschemaとcontrol flowを成立させる
+- Rust toolchainで最初のbuildが通った後、安定したproduction queryからSQLx checked macroへ移行する
+- checked macroを導入した時点で`.sqlx` offline metadataをrepositoryへcommitする
+- dynamic SQLが本当に必要な箇所以外ではunchecked queryを残さない
 - migration SQLはLFへ固定する
 
 ### Storage representation
@@ -268,7 +270,7 @@ workspace lint policy:
 
 - own codeの`unsafe_code`は禁止
 - Clippy `all`を有効にする
-- `pedantic`は有効にし、合理的で文書化されたallowだけを置く
+- `pedantic`は一括有効化せず、価値のあるlintを個別に追加する
 - public APIのmissing documentationはprotocol libraryから段階的に有効化する
 
 ## References

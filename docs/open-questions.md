@@ -7,9 +7,11 @@
 
 ## During the first implementation
 
-- jsonrpsee Tower serviceとHyper HTTP/2 Unix socket integrationに、library bugまたは不自然なadapter boundaryがないか
-- fake provider fault injection APIをtest-only moduleとRPCのどちらで公開するか
-- SQLx checked queryのoffline metadata運用をCIでどう検証するか
+- jsonrpsee Tower serviceとHyper HTTP/2 Unix socket integrationがRust 1.97.1でそのままcompileするか
+- dedicated Unix socket上でも`POST /rpc`以外を明示的に拒否するHTTP middlewareが必要か
+- SQLx checked queryへの移行とoffline metadata生成をどのcommitで行うか
+
+fake provider fault injectionは、最初の実装ではtest-only APIとしてControl Plane process内のtestから使用します。operator RPCには公開しません。
 
 これらは基本方針を変更せず、実装を進めながら決められます。
 
