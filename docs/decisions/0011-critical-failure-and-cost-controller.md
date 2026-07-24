@@ -1,25 +1,20 @@
 # ADR-0011: Critical failureからのforced deletionをCost controllerへ分離する
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-07-24
+- Superseded by: ADR-0012
 
 ## Context
 
 Cloud APIのmutation結果不明、ownership mismatch、削除API failureなどをHost controllerが無期限に回復しようとすると、複雑性と誤削除riskが増えます。
-一方、Linodeはpowered offでもaccount上に存在する限り課金されるため、terminal errorのresourceを永続的に放置することも適切ではありません。
+一方、Linodeはaccount上に存在する限り課金されるため、当初はControl Plane内部にCost controllerを追加する案を採用しました。
 
 ## Decision
 
-Host controllerはnormal lifecycle mutationだけを行います。
-短いbounded observationで解決しない外部不整合はterminalまたはCriticalとして記録し、推測的なrepair/deleteを停止します。
+このADRはADR-0012によって置き換えられました。
+Control Plane内部にはCost controllerを実装しません。
 
-terminal/critical状態で一定時間を超えた、ownershipが確定したbillable Linodeのforced deletionは、将来の独立したCost controllerがpolicyに従って行います。
-Cost controllerは同じControl Plane daemon内で動かし、Host repairやreplacementは行いません。
+## Reason for supersession
 
-DataProtectionHold、active Claim、曖昧なownershipがあるresourceは自動削除しません。
-削除APIが失敗した場合はCriticalとしてoperator interventionを要求します。
-
-## Consequences
-
-Host lifecycleのfailure modelを単純に保ちつつ、cost leakへ限定的な自動対処を追加できます。
-ただし、Critical alertとoperator runbook、およびdata-safety signalが必要になります。
+forced deletionとcost enforcementはHost lifecycleの正しさに必要な責務ではなく、Control Planeへ組み込むとfailure handlingと削除policyが複雑になります。
+予測不能な外部failureはFatal Incidentとして記録し、人間または完全に独立した外部programへ対応を委ねます。

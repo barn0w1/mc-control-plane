@@ -6,7 +6,7 @@
 | Term | Meaning |
 | --- | --- |
 | Control Plane | system全体の名称 |
-| Host Control System v1 | Akamai Cloud上のGNU/Linux Hostを、Claimから確保、認証、観測、解放、再利用、削除、cost controlまで管理する中期checkpoint |
+| Host Control System v1 | Akamai Cloud上のGNU/Linux Hostを、Claimから確保、認証、観測、解放、再利用、通常削除まで管理する中期checkpoint |
 | `control-plane` | stateとcontrollerを所有する中央daemon |
 | `host-agent` | 管理対象Hostに常駐する将来のdaemon |
 | `control` | operator向けRPC CLI client |
@@ -24,9 +24,11 @@
 | Linode ID | Akamai Cloudが発行するLinode instance identity |
 | Observation | Akamai APIまたはHost Agentから取得した時刻付き状態 |
 | Idle Host | Claimへ割り当てられておらず、正常policyにより再利用のため一時保持されているHost |
-| Critical | 自動mutationを停止し、人間の対応が必要な状態 |
-| Cost controller | terminal/critical状態で猶予期間を超えた課金Linodeをpolicyに従って処分する独立controller |
-| DataProtectionHold | durable backupが確認できず、自動削除を禁止するsignal |
+| Incident | 人間による確認や対応を必要とする、永続化されたsystem-wide error record |
+| Fatal Incident | Control Planeが正常lifecycleでは解決しないと判断し、affected scopeへの自動mutationを停止するCritical Incident |
+| Critical | Fatal Incidentにより自動mutationが停止し、人間の対応が必要なresourceまたはsubsystem state |
+| Normal deletion | Claim解放やIdle policy終了に伴う、Host Controllerが所有する通常lifecycleのLinode削除 |
+| Forced cleanup | Fatal Incident後の強制削除やcost enforcement。Control Planeのscope外 |
 
 ## Naming rules
 
@@ -36,3 +38,4 @@
   - example: `CreateHostClaimParams` and `HostClaim`
 - Host layerではAkamaiの正式なType ID、Linode ID、status語彙を使用する
 - lifecycleが独立していない概念を先回りしてResource化しない
+- operationalなFatal IncidentとRustの`panic!`を同一視しない

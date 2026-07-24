@@ -7,8 +7,9 @@
 1. [Project direction](project-direction.md)
 2. [Checkpoints](checkpoints/README.md)
 3. [Current checkpoint: Host Control System v1](checkpoints/host-control-v1/README.md)
-4. [Terminology](terminology.md)
-5. [Architecture Decision Records](decisions/README.md)
+4. [Failure model](failure-model.md)
+5. [Terminology](terminology.md)
+6. [Architecture Decision Records](decisions/README.md)
 
 ## Directory structure
 
@@ -17,6 +18,7 @@ docs/
   README.md
   project-direction.md
   terminology.md
+  failure-model.md
   checkpoints/
     README.md
     host-control-v1/
@@ -40,6 +42,7 @@ docs/
 - codeとtestが文書と矛盾した場合、開発中はcodeとtestを事実として文書を更新する
 - 実装していない構想を完成した仕様のように書かない
 - checkpoint固有の文書を`docs/`直下へ増やさない
+- 複数Controllerに共通するfailure handlingは`failure-model.md`へ集約する
 - 実装詳細は、その実装を開始する直前に決める
 - 既存の標準、protocol、libraryで十分な場合は独自仕様を作らない
 - stable releaseまでは後方互換性を設計上の制約にしない
