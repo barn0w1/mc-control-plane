@@ -61,11 +61,7 @@ pub trait HostProvider: Clone + Send + Sync + 'static {
 
     async fn observe(&self, host_id: HostId) -> Result<ProviderObservation, ProviderError>;
 
-    async fn create(
-        &self,
-        host_id: HostId,
-        plan_id: &str,
-    ) -> Result<CreateOutcome, ProviderError>;
+    async fn create(&self, host_id: HostId, plan_id: &str) -> Result<CreateOutcome, ProviderError>;
 
     async fn delete(&self, host_id: HostId) -> Result<DeleteOutcome, ProviderError>;
 }

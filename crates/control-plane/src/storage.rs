@@ -16,8 +16,7 @@ use jiff::Timestamp;
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,
     sqlite::{
-        SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow,
-        SqliteSynchronous,
+        SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow, SqliteSynchronous,
     },
 };
 
@@ -37,7 +36,10 @@ pub struct Storage {
 
 impl Storage {
     pub async fn connect(path: &Path) -> anyhow::Result<Self> {
-        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create database directory {}", parent.display()))?;
         }
@@ -80,7 +82,10 @@ impl Storage {
         validate_resources(&spec.resources)?;
 
         let mut transaction = self.pool.begin().await.map_err(internal)?;
-        if let Some(existing) = fetch_claim_row(&mut transaction, id).await.map_err(internal)? {
+        if let Some(existing) = fetch_claim_row(&mut transaction, id)
+            .await
+            .map_err(internal)?
+        {
             let existing = claim_record_from_row(&existing).map_err(internal)?;
             if existing.resource.spec == spec {
                 transaction.commit().await.map_err(internal)?;
@@ -165,10 +170,7 @@ impl Storage {
             .map_err(internal)
     }
 
-    pub async fn mark_claim_deleting(
-        &self,
-        id: HostClaimId,
-    ) -> Result<HostClaim, AppError> {
+    pub async fn mark_claim_deleting(&self, id: HostClaimId) -> Result<HostClaim, AppError> {
         let mut transaction = self.pool.begin().await.map_err(internal)?;
         let row = fetch_claim_row(&mut transaction, id)
             .await
@@ -242,10 +244,7 @@ impl Storage {
     ///
     /// `false` means a concurrent mutation superseded this observation. The
     /// controller should discard the stale status and reconcile again.
-    pub async fn save_claim_status(
-        &self,
-        record: &HostClaimRecord,
-    ) -> Result<bool, AppError> {
+    pub async fn save_claim_status(&self, record: &HostClaimRecord) -> Result<bool, AppError> {
         let deletion_timestamp = record
             .resource
             .deletion_timestamp
@@ -336,8 +335,14 @@ impl Storage {
         .bind(host.claim_id.to_string())
         .bind(host.created_at.to_string())
         .bind(i64::from(host.allocatable_resources.vcpus))
-        .bind(to_i64(host.allocatable_resources.memory_bytes, "memory_bytes")?)
-        .bind(to_i64(host.allocatable_resources.storage_bytes, "storage_bytes")?)
+        .bind(to_i64(
+            host.allocatable_resources.memory_bytes,
+            "memory_bytes",
+        )?)
+        .bind(to_i64(
+            host.allocatable_resources.storage_bytes,
+            "storage_bytes",
+        )?)
         .bind(provider_plan_id)
         .bind(serde_json::to_string(&host.status.conditions).map_err(internal)?)
         .execute(&mut *transaction)
@@ -481,7 +486,14 @@ impl Storage {
         )
         .bind(host_phase_to_db(record.resource.status.phase))
         .bind(&record.resource.status.provider_resource_id)
-        .bind(record.resource.status.observed_at.as_ref().map(ToString::to_string))
+        .bind(
+            record
+                .resource
+                .status
+                .observed_at
+                .as_ref()
+                .map(ToString::to_string),
+        )
         .bind(serde_json::to_string(&record.resource.status.conditions).map_err(internal)?)
         .bind(i64::from(record.retry.attempt))
         .bind(record.retry.next_reconcile_at_unix_ms)
@@ -850,7 +862,10 @@ mod tests {
         assert!(!storage.save_claim_status(&stale).await?);
         let current = storage.get_claim(id).await?;
         assert!(current.resource.deletion_timestamp.is_some());
-        assert_ne!(current.retry.last_error_kind.as_deref(), Some("StaleObservation"));
+        assert_ne!(
+            current.retry.last_error_kind.as_deref(),
+            Some("StaleObservation")
+        );
 
         storage.close().await;
         path.remove();
@@ -858,8 +873,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn existing_host_assignment_must_match_the_resolved_plan_and_resources(
-    ) -> anyhow::Result<()> {
+    async fn existing_host_assignment_must_match_the_resolved_plan_and_resources()
+    -> anyhow::Result<()> {
         let path = TestDatabase::new("host-assignment-conflict");
         let storage = Storage::connect(&path.database).await?;
         let claim_id = HostClaimId::new();
@@ -913,10 +928,8 @@ mod tests {
 
     impl TestDatabase {
         fn new(name: &str) -> Self {
-            let root = std::env::temp_dir().join(format!(
-                "control-plane-storage-{name}-{}",
-                Uuid::now_v7()
-            ));
+            let root = std::env::temp_dir()
+                .join(format!("control-plane-storage-{name}-{}", Uuid::now_v7()));
             std::fs::create_dir_all(&root).expect("create test directory");
             Self {
                 database: root.join("control-plane.db"),

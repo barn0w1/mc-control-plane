@@ -32,9 +32,12 @@ impl AppError {
     #[must_use]
     pub fn into_rpc_error(self) -> ErrorObjectOwned {
         let (code, kind, resource_id, message) = match self {
-            Self::InvalidArgument { message } => {
-                (INVALID_ARGUMENT_CODE, RpcErrorKind::InvalidArgument, None, message)
-            }
+            Self::InvalidArgument { message } => (
+                INVALID_ARGUMENT_CODE,
+                RpcErrorKind::InvalidArgument,
+                None,
+                message,
+            ),
             Self::NotFound {
                 resource_type,
                 resource_id,

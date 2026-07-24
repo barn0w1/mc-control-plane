@@ -126,10 +126,9 @@ mod tests {
 
     #[test]
     fn deserializes_success_without_requiring_default_on_result() {
-        let response: JsonRpcResponse<TestResult> = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":"request-1","result":{"value":"ok"}}"#,
-        )
-        .expect("deserialize JSON-RPC success response");
+        let response: JsonRpcResponse<TestResult> =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":"request-1","result":{"value":"ok"}}"#)
+                .expect("deserialize JSON-RPC success response");
 
         assert_eq!(
             response.result,

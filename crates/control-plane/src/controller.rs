@@ -7,8 +7,8 @@ use tracing::{Instrument, info_span};
 
 use crate::{
     domain::{
-        HostClaimRecord, HostRecord, RetryState, new_condition, now_timestamp,
-        now_unix_ms, retry_deadline, set_condition,
+        HostClaimRecord, HostRecord, RetryState, new_condition, now_timestamp, now_unix_ms,
+        retry_deadline, set_condition,
     },
     error::AppError,
     provider::{
@@ -295,7 +295,11 @@ where
                 host.retry = RetryState::default();
                 self.storage.save_host(&host).await?;
 
-                match self.provider.create(host.resource.id, &host.provider_plan_id).await {
+                match self
+                    .provider
+                    .create(host.resource.id, &host.provider_plan_id)
+                    .await
+                {
                     Ok(CreateOutcome::Created(resource)) => {
                         apply_provider_observation(&mut claim, &mut host, resource);
                     }
@@ -505,7 +509,11 @@ fn apply_provider_observation(
             } else {
                 ConditionStatus::False
             },
-            if claim_ready { "HostReady" } else { "HostNotReady" },
+            if claim_ready {
+                "HostReady"
+            } else {
+                "HostNotReady"
+            },
             if claim_ready {
                 "The assigned Host is Ready."
             } else {
@@ -563,14 +571,7 @@ fn mark_outcome_unknown(
     host.retry.last_error_message = Some(message.to_owned());
     set_condition(
         &mut host.resource.status.conditions,
-        new_condition(
-            "Ready",
-            ConditionStatus::Unknown,
-            kind,
-            message,
-            1,
-            now,
-        ),
+        new_condition("Ready", ConditionStatus::Unknown, kind, message, 1, now),
     );
     set_condition(
         &mut claim.resource.status.conditions,
@@ -620,11 +621,7 @@ fn mark_host_failed(
     );
 }
 
-fn schedule_claim_provider_error(
-    claim: &mut HostClaimRecord,
-    error: ProviderError,
-    now_ms: i64,
-) {
+fn schedule_claim_provider_error(claim: &mut HostClaimRecord, error: ProviderError, now_ms: i64) {
     let now = now_timestamp();
     claim.resource.status.observed_generation = claim.resource.generation;
 
@@ -682,8 +679,7 @@ fn schedule_host_provider_error(
         ProviderError::Transient { message } => {
             let now = now_timestamp();
             host.retry.attempt = host.retry.attempt.saturating_add(1);
-            host.retry.next_reconcile_at_unix_ms =
-                Some(retry_deadline(now_ms, host.retry.attempt));
+            host.retry.next_reconcile_at_unix_ms = Some(retry_deadline(now_ms, host.retry.attempt));
             host.retry.last_error_kind = Some("ProviderUnavailable".to_owned());
             host.retry.last_error_message = Some(message.clone());
             set_condition(
@@ -816,7 +812,10 @@ mod tests {
 
         let claim_id = HostClaimId::new();
         storage.create_claim(claim_id, small_spec()).await?;
-        assert_eq!(controller.reconcile_once().await?, ReconcileResult::Progress);
+        assert_eq!(
+            controller.reconcile_once().await?,
+            ReconcileResult::Progress
+        );
 
         let host = storage
             .get_host_for_claim(claim_id)
@@ -846,16 +845,27 @@ mod tests {
 
         let claim_id = HostClaimId::new();
         storage.create_claim(claim_id, small_spec()).await?;
-        assert_eq!(controller.reconcile_once().await?, ReconcileResult::Progress);
-        provider.inject_fault("create_definitive_failure", 1).await?;
-        assert_eq!(controller.reconcile_once().await?, ReconcileResult::Progress);
+        assert_eq!(
+            controller.reconcile_once().await?,
+            ReconcileResult::Progress
+        );
+        provider
+            .inject_fault("create_definitive_failure", 1)
+            .await?;
+        assert_eq!(
+            controller.reconcile_once().await?,
+            ReconcileResult::Progress
+        );
 
         let host = storage
             .get_host_for_claim(claim_id)
             .await?
             .expect("Host must be assigned");
         assert_eq!(host.resource.status.phase, HostPhase::Failed);
-        assert_eq!(host.retry.last_error_kind.as_deref(), Some("ProviderRejected"));
+        assert_eq!(
+            host.retry.last_error_kind.as_deref(),
+            Some("ProviderRejected")
+        );
         assert_eq!(provider.resource_count().await?, 0);
 
         storage.close().await;
@@ -878,16 +888,27 @@ mod tests {
 
         let claim_id = HostClaimId::new();
         storage.create_claim(claim_id, small_spec()).await?;
-        assert_eq!(controller.reconcile_once().await?, ReconcileResult::Progress);
-        provider.inject_fault("observe_transient_failure", 1).await?;
-        assert_eq!(controller.reconcile_once().await?, ReconcileResult::Progress);
+        assert_eq!(
+            controller.reconcile_once().await?,
+            ReconcileResult::Progress
+        );
+        provider
+            .inject_fault("observe_transient_failure", 1)
+            .await?;
+        assert_eq!(
+            controller.reconcile_once().await?,
+            ReconcileResult::Progress
+        );
 
         let mut host = storage
             .get_host_for_claim(claim_id)
             .await?
             .expect("Host must be assigned");
         assert_eq!(host.retry.attempt, 1);
-        assert_eq!(host.retry.last_error_kind.as_deref(), Some("ProviderUnavailable"));
+        assert_eq!(
+            host.retry.last_error_kind.as_deref(),
+            Some("ProviderUnavailable")
+        );
 
         host.retry.next_reconcile_at_unix_ms = None;
         storage.save_host(&host).await?;
@@ -923,7 +944,10 @@ mod tests {
 
         provider.inject_fault("delete_response_loss", 1).await?;
         storage.mark_claim_deleting(claim_id).await?;
-        assert_eq!(controller.reconcile_once().await?, ReconcileResult::Progress);
+        assert_eq!(
+            controller.reconcile_once().await?,
+            ReconcileResult::Progress
+        );
         assert_eq!(provider.resource_count().await?, 0);
         assert!(storage.get_claim(claim_id).await.is_ok());
 
@@ -955,15 +979,24 @@ mod tests {
 
         let claim_id = HostClaimId::new();
         storage.create_claim(claim_id, small_spec()).await?;
-        assert_eq!(controller.reconcile_once().await?, ReconcileResult::Progress);
-        assert_eq!(controller.reconcile_once().await?, ReconcileResult::Progress);
+        assert_eq!(
+            controller.reconcile_once().await?,
+            ReconcileResult::Progress
+        );
+        assert_eq!(
+            controller.reconcile_once().await?,
+            ReconcileResult::Progress
+        );
 
         let host = storage
             .get_host_for_claim(claim_id)
             .await?
             .expect("Host must be assigned");
         assert_eq!(host.resource.status.phase, HostPhase::Provisioning);
-        assert_eq!(host.retry.last_error_kind.as_deref(), Some("CreateOutcomeUnknown"));
+        assert_eq!(
+            host.retry.last_error_kind.as_deref(),
+            Some("CreateOutcomeUnknown")
+        );
 
         tokio::time::sleep(Duration::from_millis(1_050)).await;
         reconcile_to_idle(&controller, 8).await?;
@@ -1060,10 +1093,8 @@ mod tests {
 
     impl TestPaths {
         fn new(name: &str) -> Self {
-            let root = std::env::temp_dir().join(format!(
-                "control-plane-{name}-{}",
-                Uuid::now_v7()
-            ));
+            let root =
+                std::env::temp_dir().join(format!("control-plane-{name}-{}", Uuid::now_v7()));
             std::fs::create_dir_all(&root).expect("create test directory");
             Self {
                 control_plane: root.join("control-plane.db"),
@@ -1077,5 +1108,4 @@ mod tests {
             }
         }
     }
-
 }

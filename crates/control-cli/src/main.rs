@@ -4,9 +4,9 @@ use anyhow::{Context, bail};
 use bytes::Bytes;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use control_plane_protocol::{
-    CreateHostClaimParams, DeleteHostClaimParams, EmptyParams, GetHostClaimParams,
-    GetHostParams, Host, HostClaim, HostClaimId, HostClaimList, HostClaimSpec, HostId,
-    HostList, HostResources, JsonRpcRequest, JsonRpcResponse, SystemInfoResult, method,
+    CreateHostClaimParams, DeleteHostClaimParams, EmptyParams, GetHostClaimParams, GetHostParams,
+    Host, HostClaim, HostClaimId, HostClaimList, HostClaimSpec, HostId, HostList, HostResources,
+    JsonRpcRequest, JsonRpcResponse, SystemInfoResult, method,
 };
 use http::{Method, Request, header};
 use http_body_util::{BodyExt, Full, Limited};
@@ -22,7 +22,11 @@ const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 #[command(version, about = "Operator client for Control Plane")]
 struct Cli {
     /// Unix domain socket exposed by the Control Plane daemon.
-    #[arg(long, env = "CONTROL_PLANE_SOCKET", default_value = "/tmp/control-plane.sock")]
+    #[arg(
+        long,
+        env = "CONTROL_PLANE_SOCKET",
+        default_value = "/tmp/control-plane.sock"
+    )]
     socket_path: PathBuf,
 
     /// Output format.
@@ -188,9 +192,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 }
             },
             HostCommand::Get { id } => {
-                let result: Host = client
-                    .call(method::HOST_GET, GetHostParams { id })
-                    .await?;
+                let result: Host = client.call(method::HOST_GET, GetHostParams { id }).await?;
                 print_value(cli.output, &result, print_host)?;
             }
             HostCommand::List => {
@@ -232,10 +234,9 @@ impl RpcClient {
         let stream = UnixStream::connect(&self.socket_path)
             .await
             .with_context(|| format!("connect to {}", self.socket_path.display()))?;
-        let (mut sender, connection) =
-            http2::handshake(TokioExecutor::new(), TokioIo::new(stream))
-                .await
-                .context("establish HTTP/2 connection over Unix socket")?;
+        let (mut sender, connection) = http2::handshake(TokioExecutor::new(), TokioIo::new(stream))
+            .await
+            .context("establish HTTP/2 connection over Unix socket")?;
 
         tokio::spawn(async move {
             if let Err(error) = connection.await {
@@ -329,8 +330,10 @@ fn report_error(output: OutputFormat, error: &anyhow::Error) {
             };
             eprintln!(
                 "{}",
-                serde_json::to_string_pretty(&payload)
-                    .unwrap_or_else(|_| r#"{"error":{"source":"client","message":"failed to serialize error"}}"#.to_owned())
+                serde_json::to_string_pretty(&payload).unwrap_or_else(|_| {
+                    r#"{"error":{"source":"client","message":"failed to serialize error"}}"#
+                        .to_owned()
+                })
             );
         }
     }
@@ -340,11 +343,7 @@ fn parse_byte_quantity(value: &str) -> Result<u64, String> {
     parse_size::parse_size(value).map_err(|error| error.to_string())
 }
 
-fn print_value<T>(
-    format: OutputFormat,
-    value: &T,
-    human: fn(&T),
-) -> anyhow::Result<()>
+fn print_value<T>(format: OutputFormat, value: &T, human: fn(&T)) -> anyhow::Result<()>
 where
     T: Serialize,
 {

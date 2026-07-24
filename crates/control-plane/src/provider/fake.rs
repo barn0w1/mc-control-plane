@@ -5,9 +5,7 @@ use control_plane_protocol::{HostId, HostResources};
 use jiff::Timestamp;
 use sqlx::{
     Row, SqlitePool,
-    sqlite::{
-        SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
-    },
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use uuid::Uuid;
 
@@ -30,7 +28,10 @@ pub struct FakeProvider {
 
 impl FakeProvider {
     pub async fn connect(path: &Path) -> anyhow::Result<Self> {
-        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create fake provider directory {}", parent.display()))?;
         }
@@ -65,11 +66,7 @@ impl FakeProvider {
     }
 
     #[cfg(test)]
-    pub(crate) async fn inject_fault(
-        &self,
-        operation: &str,
-        count: u32,
-    ) -> anyhow::Result<()> {
+    pub(crate) async fn inject_fault(&self, operation: &str, count: u32) -> anyhow::Result<()> {
         sqlx::query(
             r#"
             INSERT INTO faults(operation, remaining) VALUES(?, ?)
@@ -85,9 +82,11 @@ impl FakeProvider {
 
     #[cfg(test)]
     pub(crate) async fn resource_count(&self) -> anyhow::Result<i64> {
-        Ok(sqlx::query_scalar("SELECT COUNT(*) FROM provider_resources")
-            .fetch_one(&self.pool)
-            .await?)
+        Ok(
+            sqlx::query_scalar("SELECT COUNT(*) FROM provider_resources")
+                .fetch_one(&self.pool)
+                .await?,
+        )
     }
 
     async fn consume_fault(&self, operation: &str) -> Result<bool, ProviderError> {
@@ -96,14 +95,13 @@ impl FakeProvider {
             .begin()
             .await
             .map_err(|error| transient(error.to_string()))?;
-        let remaining = sqlx::query_scalar::<_, i64>(
-            "SELECT remaining FROM faults WHERE operation = ?",
-        )
-        .bind(operation)
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| transient(error.to_string()))?
-        .unwrap_or(0);
+        let remaining =
+            sqlx::query_scalar::<_, i64>("SELECT remaining FROM faults WHERE operation = ?")
+                .bind(operation)
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(|error| transient(error.to_string()))?
+                .unwrap_or(0);
 
         if remaining == 0 {
             transaction
@@ -129,13 +127,12 @@ impl FakeProvider {
         &self,
         host_id: HostId,
     ) -> Result<Option<ProviderResource>, ProviderError> {
-        let row = sqlx::query(
-            "SELECT id, host_id, lifecycle FROM provider_resources WHERE host_id = ?",
-        )
-        .bind(host_id.to_string())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|error| transient(error.to_string()))?;
+        let row =
+            sqlx::query("SELECT id, host_id, lifecycle FROM provider_resources WHERE host_id = ?")
+                .bind(host_id.to_string())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|error| transient(error.to_string()))?;
 
         row.map(|row| {
             let id: String = row
@@ -228,11 +225,7 @@ impl HostProvider for FakeProvider {
             .map_or(ProviderObservation::Absent, ProviderObservation::Present))
     }
 
-    async fn create(
-        &self,
-        host_id: HostId,
-        plan_id: &str,
-    ) -> Result<CreateOutcome, ProviderError> {
+    async fn create(&self, host_id: HostId, plan_id: &str) -> Result<CreateOutcome, ProviderError> {
         if self.consume_fault(FAULT_CREATE_DEFINITIVE).await? {
             return Err(definitive("injected definitive create failure"));
         }
@@ -255,15 +248,16 @@ impl HostProvider for FakeProvider {
             return Ok(CreateOutcome::Created(existing));
         }
 
-        let plan_exists = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM plans WHERE id = ? AND enabled = 1",
-        )
-        .bind(plan_id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|error| transient(error.to_string()))?;
+        let plan_exists =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM plans WHERE id = ? AND enabled = 1")
+                .bind(plan_id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|error| transient(error.to_string()))?;
         if plan_exists != 1 {
-            return Err(definitive(format!("unknown or disabled provider plan {plan_id:?}")));
+            return Err(definitive(format!(
+                "unknown or disabled provider plan {plan_id:?}"
+            )));
         }
 
         let lose_response = self.consume_fault(FAULT_CREATE_RESPONSE_LOSS).await?;
@@ -316,9 +310,27 @@ impl HostProvider for FakeProvider {
 
 async fn seed_catalog(pool: &SqlitePool) -> anyhow::Result<()> {
     let plans = [
-        ("fake-2c-4g-40g", 2_i64, 4_i64 << 30, 40_i64 << 30, 10_000_i64),
-        ("fake-4c-8g-80g", 4_i64, 8_i64 << 30, 80_i64 << 30, 20_000_i64),
-        ("fake-8c-16g-160g", 8_i64, 16_i64 << 30, 160_i64 << 30, 40_000_i64),
+        (
+            "fake-2c-4g-40g",
+            2_i64,
+            4_i64 << 30,
+            40_i64 << 30,
+            10_000_i64,
+        ),
+        (
+            "fake-4c-8g-80g",
+            4_i64,
+            8_i64 << 30,
+            80_i64 << 30,
+            20_000_i64,
+        ),
+        (
+            "fake-8c-16g-160g",
+            8_i64,
+            16_i64 << 30,
+            160_i64 << 30,
+            40_000_i64,
+        ),
     ];
 
     for (id, vcpus, memory, storage, price) in plans {
@@ -350,7 +362,9 @@ fn lifecycle_from_db(value: &str) -> Result<ProviderLifecycle, ProviderError> {
         "provisioning" => Ok(ProviderLifecycle::Provisioning),
         "ready" => Ok(ProviderLifecycle::Ready),
         "deleting" => Ok(ProviderLifecycle::Deleting),
-        _ => Err(transient(format!("unknown fake provider lifecycle {value:?}"))),
+        _ => Err(transient(format!(
+            "unknown fake provider lifecycle {value:?}"
+        ))),
     }
 }
 

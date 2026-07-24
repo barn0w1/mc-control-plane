@@ -12,11 +12,19 @@ pub enum LogFormat {
 #[command(version, about = "Central Control Plane daemon")]
 pub struct Config {
     /// Unix domain socket used by local RPC clients.
-    #[arg(long, env = "CONTROL_PLANE_SOCKET", default_value = "/tmp/control-plane.sock")]
+    #[arg(
+        long,
+        env = "CONTROL_PLANE_SOCKET",
+        default_value = "/tmp/control-plane.sock"
+    )]
     pub socket_path: PathBuf,
 
     /// Control Plane SQLite database.
-    #[arg(long, env = "CONTROL_PLANE_DATABASE", default_value = "/tmp/control-plane.db")]
+    #[arg(
+        long,
+        env = "CONTROL_PLANE_DATABASE",
+        default_value = "/tmp/control-plane.db"
+    )]
     pub database_path: PathBuf,
 
     /// Independent fake provider SQLite database.

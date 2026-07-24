@@ -63,8 +63,6 @@ async fn shutdown_signal() -> anyhow::Result<()> {
 
     #[cfg(not(unix))]
     {
-        tokio::signal::ctrl_c()
-            .await
-            .context("listen for Ctrl-C")
+        tokio::signal::ctrl_c().await.context("listen for Ctrl-C")
     }
 }

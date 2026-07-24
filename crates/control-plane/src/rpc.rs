@@ -9,16 +9,15 @@ use std::{
 
 use anyhow::{Context, anyhow};
 use control_plane_protocol::{
-    CreateHostClaimParams, DeleteHostClaimParams, GetHostClaimParams,
-    GetHostParams, HostClaimList, HostList, ListHostClaimsParams, ListHostsParams,
-    SystemInfoParams, SystemInfoResult, method,
+    CreateHostClaimParams, DeleteHostClaimParams, GetHostClaimParams, GetHostParams, HostClaimList,
+    HostList, ListHostClaimsParams, ListHostsParams, SystemInfoParams, SystemInfoResult, method,
 };
-use jiff::Timestamp;
 use hyper::server::conn::http2;
 use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     service::TowerToHyperService,
 };
+use jiff::Timestamp;
 use jsonrpsee::{
     MethodResponse, Methods, RpcModule,
     core::middleware::{Batch, Notification, Request, RpcServiceBuilder, RpcServiceT},
@@ -156,14 +155,12 @@ async fn serve_bound(
         .max_response_body_size(MAX_RESPONSE_BYTES)
         .set_batch_request_config(BatchRequestConfig::Disabled)
         .build();
-    let rpc_middleware = RpcServiceBuilder::new()
-        .layer_fn(|service| RejectNotifications { service });
+    let rpc_middleware =
+        RpcServiceBuilder::new().layer_fn(|service| RejectNotifications { service });
     let service_builder = Server::builder()
         .set_config(config)
         .set_rpc_middleware(rpc_middleware)
-        .set_http_middleware(
-            ServiceBuilder::new().timeout(std::time::Duration::from_secs(30)),
-        )
+        .set_http_middleware(ServiceBuilder::new().timeout(std::time::Duration::from_secs(30)))
         .to_service_builder();
     let methods: Methods = rpc_module(context)?.into();
     let (stop_handle, server_handle) = stop_channel();
@@ -351,7 +348,9 @@ fn rpc_module(context: RpcContext) -> anyhow::Result<RpcModule<RpcContext>> {
     Ok(module)
 }
 
-fn parse_params<T>(params: jsonrpsee::types::Params<'_>) -> Result<T, jsonrpsee::types::ErrorObjectOwned>
+fn parse_params<T>(
+    params: jsonrpsee::types::Params<'_>,
+) -> Result<T, jsonrpsee::types::ErrorObjectOwned>
 where
     T: serde::de::DeserializeOwned,
 {
@@ -364,7 +363,10 @@ where
 }
 
 async fn prepare_socket_path(path: &Path) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         tokio::fs::create_dir_all(parent)
             .await
             .with_context(|| format!("create socket directory {}", parent.display()))?;
@@ -412,10 +414,7 @@ async fn prepare_socket_path(path: &Path) -> anyhow::Result<()> {
     }
 }
 
-async fn remove_socket_if_owned(
-    path: &Path,
-    expected: SocketIdentity,
-) -> anyhow::Result<()> {
+async fn remove_socket_if_owned(path: &Path, expected: SocketIdentity) -> anyhow::Result<()> {
     let metadata = match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -506,9 +505,6 @@ mod tests {
     }
 
     fn test_socket_path(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "control-plane-rpc-{name}-{}.sock",
-            Uuid::now_v7()
-        ))
+        std::env::temp_dir().join(format!("control-plane-rpc-{name}-{}.sock", Uuid::now_v7()))
     }
 }

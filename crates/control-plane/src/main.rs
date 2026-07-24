@@ -37,10 +37,7 @@ async fn main() -> anyhow::Result<()> {
     let rpc_context = RpcContext::new(storage.clone(), reconcile, started_at);
 
     let mut controller_task = tokio::spawn(controller.run(cancellation.child_token()));
-    let mut rpc_task = tokio::spawn(rpc_socket.serve(
-        rpc_context,
-        cancellation.child_token(),
-    ));
+    let mut rpc_task = tokio::spawn(rpc_socket.serve(rpc_context, cancellation.child_token()));
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -107,8 +104,6 @@ async fn shutdown_signal() -> anyhow::Result<()> {
 
     #[cfg(not(unix))]
     {
-        tokio::signal::ctrl_c()
-            .await
-            .context("listen for Ctrl-C")
+        tokio::signal::ctrl_c().await.context("listen for Ctrl-C")
     }
 }
