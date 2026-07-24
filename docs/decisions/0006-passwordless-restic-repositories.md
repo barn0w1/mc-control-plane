@@ -1,25 +1,22 @@
-# ADR-0006: Data repositoryでresticのpassword protectionを使用しない
+# ADR-0006: Data repositoryにpasswordless resticを使用する
 
 - Status: Accepted
 - Date: 2026-07-24
 
+## Context
+
+Python prototypeの実機検証から、restic repositoryをpasswordなしで利用し、object storageへのaccess credentialをsecurity boundaryとする構成が有用だと分かりました。
+restic passwordを別途配布・保存することは、現在のthreat modelではsecurityよりsecret管理の複雑さを増やします。
+
 ## Decision
 
-将来のData layerでは、restic repositoryを`--insecure-no-password`で作成・使用します。
-Restic passwordをrepository accessのsecurity boundaryとして扱いません。
+将来のData layerでは、restic repositoryをpasswordless modeで作成・利用します。
+repositoryのconfidentialityとintegrityをrestic passwordに依存させません。
 
-Repositoryを読み取れる主体は内容へアクセスできる前提とし、access controlはobject storage側のcredential、
-resource isolation、最小権限、credential lifetimeで管理します。
+access controlは、object storage credential、resource isolation、最小権限、credential lifetime、auditで管理します。
+repositoryへのread accessを持つ主体はdataを読める前提とします。
 
-## Reason
+## Consequences
 
-Python prototypeで、Hostへrepository passwordを配布・管理せず、一時的なstorage credentialだけでdata lifecycleを扱える構成が有用だと確認できました。
-
-## Scope
-
-このADRはpassword protectionを使わない方針だけを確定します。
-Object storage、credential発行、repository単位、retention、restore verificationの詳細はData layer実装前に決めます。
-
-## Reference
-
-- [restic: Preparing a new repository](https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html)
+Hostへrestic passwordを配布する必要がなくなり、一時credentialを中心とした単純なaccess modelを構築できます。
+一方、object storage credentialの漏洩はdata accessへ直結するため、発行scopeとlifetimeを厳密に管理する必要があります。

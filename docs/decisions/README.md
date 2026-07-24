@@ -1,13 +1,14 @@
-# Architecture decisions
+# Architecture Decision Records
 
-ADRには、現在確定しているproject-levelの判断だけを記録します。
-実装予定の詳細や候補比較は、該当実装の直前までADRにしません。
+ADRには、現在採用している大きな方針だけを記録します。
+実装libraryや細かなschemaは、長期的な設計判断でない限り実装計画またはcodeで管理します。
 
-| ADR | Decision | Status |
+| ADR | Status | Decision |
 | --- | --- | --- |
-| [0001](0001-rust-foundation.md) | FoundationをRustで構築する | Accepted |
-| [0002](0002-single-daemon-and-rpc-clients.md) | 一つのControl Plane daemonとRPC client interfaceを使用する | Accepted |
-| [0003](0003-controller-based-host-management.md) | Hostをcontrollerとreconciliationで管理する | Accepted |
-| [0004](0004-json-rpc-2.md) | RPC envelopeにJSON-RPC 2.0を使用する | Accepted |
-| [0005](0005-no-development-compatibility.md) | Stable release前の後方互換性を保証しない | Accepted |
-| [0006](0006-passwordless-restic-repositories.md) | Data repositoryでresticのpassword protectionを使用しない | Accepted |
+| [0001](0001-rust-foundation.md) | Accepted | Rustでfoundationを新しく構築する |
+| [0002](0002-single-daemon-and-rpc-clients.md) | Accepted | 単一Control Plane daemonとRPC clientを使用する |
+| [0003](0003-controller-based-host-management.md) | Accepted | Host需要をHostClaimとして提示しControllerで収束させる |
+| [0004](0004-json-rpc-2.md) | Accepted | RPC envelopeにJSON-RPC 2.0を使用する |
+| [0005](0005-no-development-compatibility.md) | Accepted | Stable release前は後方互換性を保証しない |
+| [0006](0006-passwordless-restic-repositories.md) | Accepted | Data repositoryにpasswordless resticを使用する |
+| [0007](0007-naming-and-initial-workspace.md) | Accepted | 名称と最初のCargo workspace境界を定める |

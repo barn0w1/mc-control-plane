@@ -1,14 +1,18 @@
-# ADR-0005: Stable release前の後方互換性を保証しない
+# ADR-0005: Stable release前は後方互換性を保証しない
 
 - Status: Accepted
 - Date: 2026-07-24
 
+## Context
+
+Projectは開発中で運用されていません。互換性維持は、より適切なresource model、protocol、database schema、CLIへ更新する妨げになります。
+
 ## Decision
 
-最初のstable releaseまでは、開発中のRPC、database、configuration、binary名、resource名、Host protocolとの後方互換性を保証しません。
+最初のstable releaseまで、RPC、database、configuration、CLI、Host bootstrap、certificate、resource名の後方互換性を保証しません。
+破壊的変更時にcompatibility shim、dual read、dual writeを追加しません。
 
-設計を変更するときはcompatibility shimを追加せず、不要な形式とcode pathを削除します。
+## Consequences
 
-## Reason
-
-Projectは未運用であり、互換性維持よりも、その時点で最も適切な設計へ更新できることを優先するためです。
+常に現在もっとも適切な設計へ直接更新できます。
+開発中のdatabase、Host、certificate、clientは変更に応じて作り直す必要があります。

@@ -1,16 +1,21 @@
-# ADR-0002: 一つのControl Plane daemonとRPC client interfaceを使用する
+# ADR-0002: 単一Control Plane daemonとRPC clientを使用する
 
 - Status: Accepted
 - Date: 2026-07-24
 
+## Context
+
+旧実装ではHost API、reconciler、CLIが同じstateへ異なる経路で接続し、ownershipとconfigurationが複雑になりました。
+初期systemに独立deploymentや複数writerは必要ありません。
+
 ## Decision
 
-Control Planeのstate、controller、provider integration、RPC serverは一つのdaemonが所有します。
-CLIと将来のinterfaceは、そのdaemonのRPC clientとします。
+`control-plane`を一つのRust daemonとして動かし、SQLite stateの唯一のapplication ownerにします。
+`control`、`host-agent`、将来のinterfaceはすべてRPC clientとし、databaseやproviderへ直接接続しません。
 
-## Reason
+内部責務はmoduleで分離します。必要性が実証されるまでnetwork serviceへ分割しません。
 
-一つのownerにより、configuration、lifecycle、database access、controller coordinationを一貫させられます。
-Interfaceが内部実装へ直接依存しないため、CLI、Bot、Webなどを同じ境界上に追加できます。
+## Consequences
 
-必要性が確認される前に、論理moduleを別serviceへ分割しません。
+state mutation、configuration、logging、lifecycleが一つにまとまります。
+一方、daemon停止中は通常操作できず、一つのprocess failureがすべてのcontrollerへ影響します。

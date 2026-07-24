@@ -1,32 +1,41 @@
 # Open questions
 
-未確定事項は、実装を始める時点で必要なものだけを決めます。
+現在の実装に必要になるまで、次の詳細は未確定とします。
+質問を解決するときは、既存の標準や成熟したlibraryを先に調査します。
 
-## Decide before creating the Rust workspace
+## Before implementing the first workspace
 
-1. projectとbinaryの名称
-2. Host需要resourceの名称
-3. 最初のworkspaceに含めるcrateまたはpackageの最小単位
+- Rust toolchain versionとMSRVをどう設定するか
+- JSON-RPC 2.0 server/clientにどのmaintained libraryを使用するか
+- HTTP over Unix domain socketにどのHTTP stackを使用するか
+- async runtime、logging、CLI parsing、SQLite libraryを何にするか
+- 最初のHostClaim specに本当に必要なfieldは何か
+- fake providerの独立状態をtestでどのように表現するか
 
-## Decide before the first RPC implementation
+これらは最初の実装を開始する直前に決定します。
 
-1. local operator CLIとControl Plane daemonのtransport
-2. JSON-RPC schemaをRust型から生成するか、schema-firstにするか
-3. 使用するJSON-RPC library、または小さなprotocol adapterの範囲
+## Before Linode integration
 
-## Decide before persistent reconciliation
+- official SDK、generated client、direct HTTP clientのどれを使用するか
+- ownership metadataとresource discoveryをどう表現するか
+- create/deleteのoutcome-unknownをどのprovider情報で解決するか
 
-1. SQLite access libraryとmigration方法
-2. resource revisionとconcurrent updateの扱い
-3. controller wake-upとretryをどこまで永続化するか
+## Before host-agent communication
 
-## Decide later
+- Host transportをHTTPS long polling、HTTP/2、WebSocketなどのどれにするか
+- mTLSのcertificate profile、発行、rotation、失効をどう設計するか
+- enrollmentとHost identityをどうbindingするか
+- command deliveryとlocal journalの最小protocolは何か
 
-- Linode API client library
-- Host enrollmentとmTLS PKI
-- Host daemon command delivery
-- idle retentionとbilling boundaryの具体的policy
-- Data layer、restic credential、snapshot、restore、retention
-- Workload layerとMinecraft-specific model
+## Before idle Host reuse
 
-「Decide later」にある項目は、現在のfoundation実装を止める理由にはしません。
+- どの条件をHost compatibilityとして扱うか
+- 再利用前に何をsanitizationするか
+- Linodeの課金境界をどの時刻から判断するか
+- idle保持時間、最大台数、削除marginをどう設定するか
+
+## Before the Data layer
+
+- passwordless restic repositoryへのtemporary credential発行方法
+- repository namespaceとownership
+- snapshot verificationとretention

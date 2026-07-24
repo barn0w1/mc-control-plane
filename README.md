@@ -1,34 +1,42 @@
 # mc-control-plane
 
-Rustで新しいControl Plane基盤を設計・実装するprojectです。
-repository名は当面そのまま使用しますが、project名、binary名、crate名はまだ確定していません。
+Hostを起点としたresource automationのControl Planeを、Rustで新しく構築するprojectです。
+repository名には歴史的にMinecraftが含まれていますが、systemとbinaryの名称には用途を無理に含めません。
 
-既存のPython実装を移植するprojectではありません。Python実装と実環境検証から得られた知見は利用しますが、
-開発中のAPI、protocol、database、configuration、名称との後方互換性は保証しません。
+現在は、既存のPython prototypeを移植する段階ではありません。prototypeから得たfailure caseと有効だった設計を参考にしつつ、
+新しいresource modelとcontrol loopを小さく実装して検証します。
 
-## Current focus
+## Names
 
-現在の中期目標は、**Host layerをControl Planeから完全に管理できること**です。
+| Role | Name |
+| --- | --- |
+| System | **Control Plane** |
+| Central daemon | `control-plane` |
+| Host-resident daemon | `host-agent` |
+| Operator CLI | `control` |
+| Persistent Host demand | `HostClaim` |
 
-- 上位layerが必要なHostを宣言できる
-- controllerが要求と実状態を継続的にreconcileする
-- 必要数のHostをAkamai Cloud / Linode上に確保する
-- Host上の常駐daemonとControl Planeが安全に通信する
-- 解放されたHostを再利用可能な状態へ戻す
-- policyに従ってidle保持または削除する
-- process restartや一時的な外部障害があっても収束を再開する
-- operatorはRPC clientだけを使用し、databaseやproviderを直接操作しない
+repository名は引き続き`mc-control-plane`を使用します。
 
-Minecraft workload、backup、snapshotなどの上位layerは、この基盤が成立した後に個別に設計します。
+## Current goal
+
+中期目標は、Host layerをControl Planeだけで完全に管理できることです。
+
+- clientが`HostClaim`を作成・削除できる
+- controllerが必要なHost数へ自動的に収束する
+- Hostのidentityとprovider resourceをControl Planeが管理する
+- Claim解放後の再利用または削除をHost subsystemが判断する
+- daemonやHostの再起動、通信断、provider APIの不確実な結果から安全に再開する
+- 通常操作は`control`からRPCを通じて行い、databaseやproviderを直接操作しない
+
+最初の実装では、LinodeやHostとの通信へ進む前に、local RPC、SQLite、`HostClaim`、`Host`、
+fake providerによるreconciliationを成立させます。
 
 ## Documentation
 
-設計と計画の入口は[docs/README.md](docs/README.md)です。
+設計文書の入口は[docs/README.md](docs/README.md)です。
 
-文書は、実装より大幅に先行して詳細を固定しない方針です。次に実装する範囲に必要な内容だけを決め、
-それ以外は未確定事項として残します。
+## Python prototype
 
-## Previous implementation
-
-Python prototypeはGit履歴と`python-prototype-reference-2026-07-23` tagから参照できます。
-現在のworking treeには残しません。
+旧Python実装はGit履歴と`python-prototype-reference-2026-07-23` tagから参照できます。
+後方互換性や移行経路は提供しません。
