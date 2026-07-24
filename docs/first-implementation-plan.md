@@ -20,15 +20,9 @@ control-plane
 
 ## Implementation status
 
-この計画の最初の実装はcodeとして追加済みです。ただし、Rust toolchainを使用できない環境で作成したため、現時点では**implementation candidate**です。
-Rust 1.97.1環境で次を通し、発見したAPI差異やlintを修正した時点でverifiedとします。
-
-```text
-cargo fmt --all -- --check
-cargo check --workspace --all-targets
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-```
+この計画のvertical sliceは実装済みです。
+ユーザーのRust 1.97.1環境でcompile可能となり、workspace testはすべて成功しています。`cargo fmt`も適用済みです。
+strict Clippyで報告された警告は修正済みですが、最新commitに対する再実行結果はまだ共有されていません。
 
 現在実装されている範囲:
 
@@ -42,8 +36,9 @@ cargo test --workspace --all-features
 - Claim deletionとcontroller status writeの競合防止
 - controller開始前のRPC socket bind、active/stale socketの安全な判定、owned socketだけのcleanup
 
-local verification後に残る作業:
+現在残る仕上げ作業:
 
+- 最新commitでstrict Clippyを再実行する
 - `Cargo.lock`を生成してcommitする
 - SQLx checked queryへ段階的に移行し、必要なoffline metadataをcommitする
 - `POST /rpc`以外がtransport layerで確実に拒否されることをconformance testで確認し、必要ならHTTP middlewareを追加する
@@ -272,9 +267,9 @@ fake providerは別SQLite fileに次を持ちます。
 7. 残るClaimとHostには影響しない
 8. create/delete response lossを注入しても同じ最終状態へ収束する
 
-## First implementation complete
+## First implementation completion
 
-次を満たした時点で完了とします。
+architectureとfunctional behaviorについては、次の項目を実装済みです。
 
 - Rust 1.97 / Edition 2024の四package workspaceが成立する
 - Tokio process lifecycleとstructured diagnosticsが成立する

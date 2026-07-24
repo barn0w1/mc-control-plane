@@ -7,8 +7,7 @@
 
 ## During the first implementation
 
-- jsonrpsee Tower serviceとHyper HTTP/2 Unix socket integrationがRust 1.97.1でそのままcompileするか
-- dedicated Unix socket上でも`POST /rpc`以外を明示的に拒否するHTTP middlewareが必要か
+- dedicated Unix socket上で`POST /rpc`以外を拒否することをどのtransport testで固定するか
 - SQLx checked queryへの移行とoffline metadata生成をどのcommitで行うか
 - `Failed` Hostをoperator retry、automatic replacement、Claim recreationのどれで回復させるか
 
