@@ -9,25 +9,28 @@
 
 - dedicated Unix socket上で`POST /rpc`以外を拒否することをどのtransport testで固定するか
 - SQLx checked queryへの移行とoffline metadata生成をどのcommitで行うか
-- `Failed` Hostをoperator retry、automatic replacement、Claim recreationのどれで回復させるか
+- terminal Hostをoperatorがacknowledge、Claim recreate、manual deleteのどれで処理するか
 
 fake provider fault injectionは、最初の実装ではtest-only APIとしてControl Plane process内のtestから使用します。operator RPCには公開しません。
 
 これらは基本方針を変更せず、実装を進めながら決められます。
 
-## Before Linode integration
+## Before Akamai Cloud integration
 
-Akamai Cloudを正式な実providerとし、runtimeで差し替える汎用provider plugin systemは作りません。fake testのためのprivate infrastructure boundaryだけを残します。方向は[Host management direction](host-management-direction.md)を参照してください。
+Host layerはAkamai Cloud native、HostClaimは正確なLinode Type IDとすることを決定済みです。方向は[Host management direction](host-management-direction.md)を参照してください。
 
 実装前に決める事項:
 
-- official SDK、generated client、direct HTTP clientのどれを使用するか
-- allowed plan family/type policyをconfigurationでどう表現するか
-- system reserved CPU、memory、storageの初期値
-- ownership metadataとresource discoveryをLinode label/tagへどう符号化するか
-- bounded convergence windowとcleanup deadline
-- Linode type catalogとpriceをどの頻度でrefreshするか
-- account-level ownership inventoryをどのintervalで実行するか
+- official OpenAPIからclientを生成するか、direct HTTP clientを実装するか
+- Akamai API tokenの権限とsecret loading
+- fixed region、image、Cloud Firewall、VPC/interface、disk encryptionなどのtyped configuration
+- Host ID、Claim ID、deployment IDをlabel/tagへどう符号化するか
+- raw Linode statusを表すforward-compatible Rust型
+- create outcome unknownのobservation window
+- normal deleteのobservation window
+- Critical recordとoperator acknowledgement model
+- Cost controllerのgrace period、enable flag、one-shot disposal semantics
+- account-level owned Linode inventoryのscan interval
 
 ## Before host-agent communication
 
@@ -41,9 +44,9 @@ Akamai Cloudを正式な実providerとし、runtimeで差し替える汎用provi
 ## Before idle Host reuse
 
 - ClaimとHostのallocationを独立resourceへ分離する必要があるか
-- compatibilityをCPU/memory/storage以外の何で判定するか
+- compatibilityをLinode Type ID、bootstrap revision、network/security configurationのどこまで一致させるか
 - 再利用前のsanitization contract
-- Linodeの課金境界をどのprovider timestampから判断するか
+- Linodeの課金境界をどのAkamai timestampから判断するか
 - idle保持時間、最大台数、削除margin
 
 ## Before the Data layer

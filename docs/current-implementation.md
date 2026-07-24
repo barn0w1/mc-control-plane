@@ -23,6 +23,20 @@ Claimを削除すると、provider resourceの不存在を確認した後にHost
 
 これはHost control milestone全体の完成ではありません。Linode、Host Agent通信、Host再利用はまだ含まれません。
 
+
+## Direction change after this vertical slice
+
+現在のresource quantityとgeneric-looking fake providerは、local RPC、SQLite、controller、failure injectionを検証するための最初のmodelです。
+Host layerをAkamai Cloud nativeとする方針が確定したため、Linode integration前に破壊的に置き換えます。
+
+- `HostClaim.spec.resources` -> exact `HostClaim.spec.type` (Linode Type ID)
+- automatic plan selection -> removed
+- generic provider wording -> Akamai/Linode-specific boundary
+- fake plan catalog -> fake Akamai Type/instance/status model
+- terminal failure cleanup -> Host controllerから分離し、将来のCost controllerまたは人間が担当
+
+現在のcodeとtestが誤っているという意味ではなく、基盤検証を終えた旧domain modelとして扱います。互換migrationは作りません。
+
 ## Workspace
 
 ```text

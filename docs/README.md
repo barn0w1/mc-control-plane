@@ -8,6 +8,7 @@
 - [Project direction](project-direction.md)
 - [Host control milestone](host-control-milestone.md)
 - [Host management direction](host-management-direction.md)
+- [Cost control direction](cost-control-direction.md)
 - [Current implementation](current-implementation.md)
 - [Implementation foundation](implementation-foundation.md)
 - [HostClaim specification](host-claim-spec.md)

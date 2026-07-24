@@ -1,5 +1,8 @@
 # First implementation plan
 
+> [!NOTE]
+> この文書は実装済みの最初のvertical sliceの記録です。HostClaimのresource quantityとplan selectionは、ADR-0010により将来targetではなくなりました。現在の実装事実は[Current implementation](current-implementation.md)、次のtargetは[HostClaim specification](host-claim-spec.md)を参照してください。
+
 ## Objective
 
 最初の実装では、実cloudやHost通信へ進む前に、次のvertical sliceを完成させます。

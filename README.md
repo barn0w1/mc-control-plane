@@ -24,9 +24,9 @@ repository名は引き続き`mc-control-plane`を使用します。
 
 - clientが`HostClaim`を作成・削除できる
 - controllerが必要なHost数へ自動的に収束する
-- Hostのidentityとprovider resourceをControl Planeが管理する
+- HostのidentityとAkamai Cloud LinodeをControl Planeが管理する
 - Claim解放後の再利用または削除をHost subsystemが判断する
-- daemonやHostの再起動、通信断、provider APIの不確実な結果から安全に再開する
+- daemonやHostの再起動、通信断、Akamai APIの観測結果から状態を再構築する
 - 通常操作は`control`からRPCを通じて行い、databaseやproviderを直接操作しない
 
 最初の実装では、Rust 1.97 / Edition 2024、Tokio、HTTP/2 over Unix domain socket、JSON-RPC 2.0、
@@ -50,7 +50,7 @@ SQLx/SQLiteを基盤として、`HostClaim`、`Host`、fake providerによるrec
 - active Unix socketを誤ってunlinkしないstartup/shutdown処理
 
 実装範囲、runtime flow、保証と未実装部分は[Current implementation](docs/current-implementation.md)を参照してください。
-Host管理の完成形に関する方向は[Host management direction](docs/host-management-direction.md)、実装計画と残作業は[First implementation plan](docs/first-implementation-plan.md)にあります。
+Host管理の完成形に関する方向は[Host management direction](docs/host-management-direction.md)、異常な課金resourceの処分方針は[Cost control direction](docs/cost-control-direction.md)、実装計画と残作業は[First implementation plan](docs/first-implementation-plan.md)にあります。
 
 ## Documentation
 

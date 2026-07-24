@@ -16,7 +16,7 @@ control-plane
   RPC boundary
   persistent state
   controllers
-  provider integration
+  Akamai Cloud integration
       ^
       |
 host-agent
@@ -27,21 +27,21 @@ host-agent
 初期段階でnetwork serviceへ細分化しません。
 
 すべてのinterfaceはRPC clientです。CLI、将来のBotやWeb interface、Host daemonはdatabaseへ直接接続せず、
-provider APIやcontroller内部実装も直接呼びません。
+Akamai APIやcontroller内部実装も直接呼びません。
 
 ## Control model
 
-上位componentは「Linodeを作成する」と命令しません。必要なHostを`HostClaim`として提示します。
+上位componentはLinode APIの操作手順を命令しません。必要な一台のHostを、正確なLinode Type IDを持つ`HostClaim`として提示します。
 Host controllerは、daemon稼働中に継続責任を持つcontrol loopとして、保存されたClaimと観測したHostを比較し、必要なHost数へ継続的に収束します。eventやtimerは処理を早める内部mechanismであり、event配送を正しさの前提にしません。
 
 このmodelでは、process再起動や同じreconciliationの再実行を通常動作として扱います。
-外部操作の結果が不明な場合は、無条件に再実行せず、期限付きで外部状態を再観測してから判断します。期待状態へ収束しないHost attemptはterminal failureとし、所有を確認できる課金resourceを優先的にcleanupします。
+外部操作の結果が不明な場合は、無条件に再実行せず、短い期限内でAkamai状態を再観測します。解決しない場合はterminalまたはCriticalとしてHost controllerのmutationを停止します。異常状態の課金resourceを一定時間後に強制削除する責務は、将来のCost controllerへ分離します。
 
 Host managementの完成形に関する方向は[Host management direction](host-management-direction.md)を参照してください。
 
 ## Scope discipline
 
-現在確定しているのは、Rust 1.97 / Edition 2024、単一daemon、RPC client、JSON-RPC 2.0、HTTP/2 over Unix domain socket、Tokio、SQLx/SQLite、controller model、HostClaimです。
+現在確定しているのは、Rust 1.97 / Edition 2024、単一daemon、RPC client、JSON-RPC 2.0、HTTP/2 over Unix domain socket、Tokio、SQLx/SQLite、controller model、Akamai-native HostClaimです。
 
 次の詳細は必要になるまで固定しません。
 

@@ -1,5 +1,8 @@
 # Implementation foundation
 
+> [!NOTE]
+> library、transport、SQLiteの選択は継続します。後半のHostClaim quantityとplan-selection例は最初のvertical sliceの実装記録であり、ADR-0010のAkamai-native `spec.type`へ置き換える予定です。
+
 この文書は、最初のRust workspaceを実装するために使用するtoolchain、library、transport、persistence、diagnosticsの具体的な選択を定めます。
 長期的なproduct仕様ではなく、最初のvertical sliceを一貫した基盤上で実装するための決定です。
 

@@ -16,13 +16,16 @@
 | Controller | daemon稼働中、担当resourceのdesired stateとobserved stateを継続的に収束させるnon-terminating control loop |
 | Reconciliation | Controllerが差分を観測し必要な変更を行う一回の処理 |
 | HostClaim | 一台のHostに対する永続的かつ排他的な需要 |
-| Allocatable capacity | OSやHost Agent用reserveを除き、workloadへ提供可能なCPU、memory、storage |
-| Provisioning policy | region、plan許可範囲、network、image、bootstrapなどControl Plane deploymentが所有する固定方針 |
-| Host | workloadの土台となる一つの管理されたGNU/Linux実行環境。実装上はAkamai CloudのLinodeだが、概念上はvirtual/physicalを問わない |
+| Linode Type ID | Akamai Cloudが公開するcompute SKUの正確なID。HostClaimの`spec.type`で指定する |
+| Deployment configuration | region、network、image、bootstrapなど全Hostへ共通適用するAkamai設定 |
+| Host | workloadの土台となる一つの管理されたGNU/Linux実行環境。このprojectでは一つのAkamai Cloud Linodeに対応する |
 | Host ID | Control Planeが発行するHostの内部identity |
-| Provider resource ID | Linodeなど外部providerが発行するidentity |
-| Observation | providerまたはHostから取得した時刻付き状態 |
-| Idle Host | Claimへ割り当てられておらず、再利用のため一時保持されているHost |
+| Linode ID | Akamai Cloudが発行するLinode instance identity |
+| Observation | Akamai APIまたはHost Agentから取得した時刻付き状態 |
+| Idle Host | Claimへ割り当てられておらず、正常policyにより再利用のため一時保持されているHost |
+| Critical | 自動mutationを停止し、人間の対応が必要な状態 |
+| Cost controller | terminal/critical状態で猶予期間を超えた課金Linodeをpolicyに従って処分する独立controller |
+| DataProtectionHold | durable backupが確認できず、自動削除を禁止するsignal |
 
 ## Naming rules
 
@@ -30,5 +33,5 @@
 - binary名に慣習だけを理由として`d`や`ctl`を付けない
 - RPC request型とpersistent resourceを区別する
   - example: `CreateHostClaimParams` and `HostClaim`
-- provider固有の名称をHostより上位のlayerへ漏らさない
+- Host layerではAkamaiの正式なType ID、Linode ID、status語彙を使用する
 - lifecycleが独立していない概念を先回りしてResource化しない
