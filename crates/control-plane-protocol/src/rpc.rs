@@ -97,13 +97,11 @@ pub struct JsonRpcRequest<P> {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, bound(deserialize = "R: Deserialize<'de>"))]
 pub struct JsonRpcResponse<R> {
     pub jsonrpc: String,
     pub id: String,
-    #[serde(default)]
     pub result: Option<R>,
-    #[serde(default)]
     pub error: Option<JsonRpcErrorObject>,
 }
 
@@ -114,4 +112,45 @@ pub struct JsonRpcErrorObject {
     pub message: String,
     #[serde(default)]
     pub data: Option<Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Eq, PartialEq, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct TestResult {
+        value: String,
+    }
+
+    #[test]
+    fn deserializes_success_without_requiring_default_on_result() {
+        let response: JsonRpcResponse<TestResult> = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"request-1","result":{"value":"ok"}}"#,
+        )
+        .expect("deserialize JSON-RPC success response");
+
+        assert_eq!(
+            response.result,
+            Some(TestResult {
+                value: "ok".to_owned(),
+            })
+        );
+        assert!(response.error.is_none());
+    }
+
+    #[test]
+    fn deserializes_error_without_a_result_field() {
+        let response: JsonRpcResponse<TestResult> = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"request-1","error":{"code":-32603,"message":"Internal error"}}"#,
+        )
+        .expect("deserialize JSON-RPC error response");
+
+        assert!(response.result.is_none());
+        let error = response.error.expect("error response");
+        assert_eq!(error.code, -32603);
+        assert_eq!(error.message, "Internal error");
+        assert!(error.data.is_none());
+    }
 }

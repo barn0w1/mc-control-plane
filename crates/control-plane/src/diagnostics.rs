@@ -11,11 +11,13 @@ pub fn init(format: LogFormat) -> anyhow::Result<()> {
             .with_env_filter(filter)
             .json()
             .try_init()
+            .map_err(anyhow::Error::from_boxed)
             .context("initialize JSON tracing subscriber"),
         LogFormat::Compact => tracing_subscriber::fmt()
             .with_env_filter(filter)
             .compact()
             .try_init()
+            .map_err(anyhow::Error::from_boxed)
             .context("initialize compact tracing subscriber"),
     }
 }

@@ -220,7 +220,9 @@ async fn serve_bound(
         }
     }
 
-    let _ = server_handle.stop();
+    if let Err(error) = server_handle.stop() {
+        tracing::debug!(?error, "local RPC server was already stopped");
+    }
     while let Some(joined) = connections.join_next().await {
         if let Err(error) = joined {
             tracing::warn!(error = ?error, "local RPC connection task failed during shutdown");
@@ -261,7 +263,7 @@ where
         &self,
         notification: Notification<'a>,
     ) -> impl Future<Output = Self::NotificationResponse> + Send + 'a {
-        tracing::warn!(method = %notification.method, "rejected JSON-RPC notification");
+        tracing::warn!(method = %notification.method_name(), "rejected JSON-RPC notification");
         std::future::ready(NotifyMsg::Err)
     }
 }

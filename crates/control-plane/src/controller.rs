@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use control_plane_protocol::{ConditionStatus, HostClaimId, HostPhase};
+use control_plane_protocol::{ConditionStatus, HostPhase};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info_span};
@@ -20,7 +20,7 @@ use crate::{
 
 const MAX_STEPS_PER_WAKE: usize = 64;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ReconcileHandle {
     notify: Arc<Notify>,
 }
@@ -28,9 +28,7 @@ pub struct ReconcileHandle {
 impl ReconcileHandle {
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            notify: Arc::new(Notify::new()),
-        }
+        Self::default()
     }
 
     pub fn wake(&self) {
@@ -734,7 +732,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use control_plane_protocol::{HostClaimSpec, HostResources};
+    use control_plane_protocol::{HostClaimId, HostClaimSpec, HostResources};
     use uuid::Uuid;
 
     #[test]

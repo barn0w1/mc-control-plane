@@ -627,6 +627,7 @@ fn acquire_database_ownership(database_path: &Path) -> anyhow::Result<File> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(&lock_path)
         .with_context(|| format!("open database ownership lock {}", lock_path.display()))?;
 
@@ -663,8 +664,8 @@ fn validate_resources(resources: &HostResources) -> Result<(), AppError> {
             message: "storage_bytes must be greater than zero".to_owned(),
         });
     }
-    let _ = to_i64(resources.memory_bytes, "memory_bytes")?;
-    let _ = to_i64(resources.storage_bytes, "storage_bytes")?;
+    to_i64(resources.memory_bytes, "memory_bytes")?;
+    to_i64(resources.storage_bytes, "storage_bytes")?;
     Ok(())
 }
 

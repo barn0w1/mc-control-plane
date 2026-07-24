@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, bail};
 use bytes::Bytes;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use control_plane_protocol::{
@@ -258,6 +258,7 @@ impl RpcClient {
         let body = Limited::new(response.into_body(), MAX_RESPONSE_BYTES)
             .collect()
             .await
+            .map_err(anyhow::Error::from_boxed)
             .context("read bounded local RPC response")?
             .to_bytes();
         if !status.is_success() {
