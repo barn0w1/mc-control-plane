@@ -24,7 +24,6 @@ pub enum AppError {
         message: String,
     },
 
-
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }

@@ -1,9 +1,10 @@
 use std::{
     fs::Permissions,
     future::Future,
+    os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
+    path::{Path, PathBuf},
     sync::Arc,
-    os::unix::fs::{FileTypeExt, PermissionsExt},
-    path::Path,
+    time::Duration,
 };
 
 use anyhow::{Context, anyhow};
@@ -23,7 +24,11 @@ use jsonrpsee::{
     core::middleware::{Batch, Notification, Request, RpcServiceBuilder, RpcServiceT},
     server::{BatchRequestConfig, Server, ServerConfig, stop_channel},
 };
-use tokio::{net::UnixListener, sync::Semaphore, task::JoinSet};
+use tokio::{
+    net::{UnixListener, UnixStream},
+    sync::Semaphore,
+    task::JoinSet,
+};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceBuilder;
 
@@ -32,6 +37,75 @@ use crate::{controller::ReconcileHandle, error::AppError, storage::Storage};
 const MAX_REQUEST_BYTES: u32 = 1024 * 1024;
 const MAX_RESPONSE_BYTES: u32 = 4 * 1024 * 1024;
 const MAX_CONNECTIONS: usize = 64;
+const EXISTING_SOCKET_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SocketIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[derive(Debug)]
+struct SocketPathGuard {
+    path: PathBuf,
+    identity: SocketIdentity,
+}
+
+impl SocketPathGuard {
+    fn new(path: &Path) -> anyhow::Result<Self> {
+        Ok(Self {
+            path: path.to_owned(),
+            identity: socket_identity(path)?,
+        })
+    }
+}
+
+impl Drop for SocketPathGuard {
+    fn drop(&mut self) {
+        let Ok(identity) = socket_identity(&self.path) else {
+            return;
+        };
+        if identity != self.identity {
+            return;
+        }
+        if let Err(error) = std::fs::remove_file(&self.path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    socket = %self.path.display(),
+                    error = ?error,
+                    "failed to remove owned local RPC socket"
+                );
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct BoundRpcSocket {
+    listener: UnixListener,
+    socket_guard: SocketPathGuard,
+    socket_path: PathBuf,
+    socket_mode: u32,
+}
+
+impl BoundRpcSocket {
+    pub async fn serve(
+        self,
+        context: RpcContext,
+        cancellation: CancellationToken,
+    ) -> anyhow::Result<()> {
+        let Self {
+            listener,
+            socket_guard,
+            socket_path,
+            socket_mode,
+        } = self;
+        serve_bound(listener, &socket_path, socket_mode, context, cancellation).await?;
+        drop(socket_guard);
+        tracing::info!(socket = %socket_path.display(), "local RPC server stopped");
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct RpcContext {
@@ -51,19 +125,30 @@ impl RpcContext {
     }
 }
 
-pub async fn serve(
+pub async fn bind(socket_path: &Path, socket_mode: u32) -> anyhow::Result<BoundRpcSocket> {
+    prepare_socket_path(socket_path).await?;
+    let listener = UnixListener::bind(socket_path)
+        .with_context(|| format!("bind local RPC socket {}", socket_path.display()))?;
+    let socket_guard = SocketPathGuard::new(socket_path)?;
+    tokio::fs::set_permissions(socket_path, Permissions::from_mode(socket_mode))
+        .await
+        .with_context(|| format!("set mode on local RPC socket {}", socket_path.display()))?;
+
+    Ok(BoundRpcSocket {
+        listener,
+        socket_guard,
+        socket_path: socket_path.to_owned(),
+        socket_mode,
+    })
+}
+
+async fn serve_bound(
+    listener: UnixListener,
     socket_path: &Path,
     socket_mode: u32,
     context: RpcContext,
     cancellation: CancellationToken,
 ) -> anyhow::Result<()> {
-    prepare_socket_path(socket_path).await?;
-    let listener = UnixListener::bind(socket_path)
-        .with_context(|| format!("bind local RPC socket {}", socket_path.display()))?;
-    tokio::fs::set_permissions(socket_path, Permissions::from_mode(socket_mode))
-        .await
-        .with_context(|| format!("set mode on local RPC socket {}", socket_path.display()))?;
-
     let config = ServerConfig::builder()
         .http_only()
         .max_connections(MAX_CONNECTIONS as u32)
@@ -142,11 +227,8 @@ pub async fn serve(
         }
     }
     drop(listener);
-    remove_socket_if_present(socket_path).await?;
-    tracing::info!(socket = %socket_path.display(), "local RPC server stopped");
     Ok(())
 }
-
 
 #[derive(Clone, Debug)]
 struct RejectNotifications<S> {
@@ -179,7 +261,7 @@ where
         &self,
         notification: Notification<'a>,
     ) -> impl Future<Output = Self::NotificationResponse> + Send + 'a {
-        tracing::warn!(method = %notification.method_name(), "rejected JSON-RPC notification");
+        tracing::warn!(method = %notification.method, "rejected JSON-RPC notification");
         std::future::ready(NotifyMsg::Err)
     }
 }
@@ -194,7 +276,7 @@ fn rpc_module(context: RpcContext) -> anyhow::Result<RpcModule<RpcContext>> {
             binary_version: env!("CARGO_PKG_VERSION").to_owned(),
             rust_version: env!("CONTROL_PLANE_RUSTC_VERSION").to_owned(),
             protocol_version: control_plane_protocol::PROTOCOL_VERSION.to_owned(),
-            started_at: context.started_at.clone(),
+            started_at: context.started_at,
         })
     })?;
 
@@ -280,15 +362,12 @@ where
 }
 
 async fn prepare_socket_path(path: &Path) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         tokio::fs::create_dir_all(parent)
             .await
             .with_context(|| format!("create socket directory {}", parent.display()))?;
     }
-    remove_socket_if_present(path).await
-}
 
-async fn remove_socket_if_present(path: &Path) -> anyhow::Result<()> {
     let metadata = match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -300,7 +379,56 @@ async fn remove_socket_if_present(path: &Path) -> anyhow::Result<()> {
 
     if !metadata.file_type().is_socket() {
         return Err(anyhow!(
-            "refusing to remove non-socket path {}",
+            "refusing to replace non-socket path {}",
+            path.display()
+        ));
+    }
+    let existing_identity = SocketIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    };
+
+    match tokio::time::timeout(EXISTING_SOCKET_PROBE_TIMEOUT, UnixStream::connect(path)).await {
+        Ok(Ok(_stream)) => Err(anyhow!(
+            "local RPC socket {} is already served by another process",
+            path.display()
+        )),
+        Err(_elapsed) => Err(anyhow!(
+            "timed out while probing existing local RPC socket {}; refusing to remove it",
+            path.display()
+        )),
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+            remove_socket_if_owned(path, existing_identity).await
+        }
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(Err(error)) => Err(error).with_context(|| {
+            format!(
+                "probe existing local RPC socket {}; refusing to remove it",
+                path.display()
+            )
+        }),
+    }
+}
+
+async fn remove_socket_if_owned(
+    path: &Path,
+    expected: SocketIdentity,
+) -> anyhow::Result<()> {
+    let metadata = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("reinspect stale local RPC socket {}", path.display()));
+        }
+    };
+    let current = SocketIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    };
+    if !metadata.file_type().is_socket() || current != expected {
+        return Err(anyhow!(
+            "local RPC socket {} changed while it was being probed; refusing to remove it",
             path.display()
         ));
     }
@@ -308,4 +436,77 @@ async fn remove_socket_if_present(path: &Path) -> anyhow::Result<()> {
     tokio::fs::remove_file(path)
         .await
         .with_context(|| format!("remove stale local RPC socket {}", path.display()))
+}
+
+fn socket_identity(path: &Path) -> anyhow::Result<SocketIdentity> {
+    let metadata = std::fs::symlink_metadata(path)
+        .with_context(|| format!("inspect local RPC socket {}", path.display()))?;
+    if !metadata.file_type().is_socket() {
+        return Err(anyhow!("path {} is not a Unix socket", path.display()));
+    }
+    Ok(SocketIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use tokio::net::UnixListener;
+    use uuid::Uuid;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn refuses_to_replace_an_active_socket() -> anyhow::Result<()> {
+        let path = test_socket_path("active");
+        let listener = UnixListener::bind(&path)?;
+
+        let error = prepare_socket_path(&path)
+            .await
+            .expect_err("an active socket must not be removed");
+        assert!(error.to_string().contains("already served"));
+        assert!(path.exists());
+
+        drop(listener);
+        let _ = std::fs::remove_file(path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn removes_a_stale_socket() -> anyhow::Result<()> {
+        let path = test_socket_path("stale");
+        let listener = UnixListener::bind(&path)?;
+        drop(listener);
+
+        prepare_socket_path(&path).await?;
+        assert!(!path.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn socket_guard_does_not_remove_a_replacement_socket() -> anyhow::Result<()> {
+        let path = test_socket_path("replacement");
+        let first = UnixListener::bind(&path)?;
+        let guard = SocketPathGuard::new(&path)?;
+
+        std::fs::remove_file(&path)?;
+        let replacement = UnixListener::bind(&path)?;
+        drop(guard);
+        assert!(path.exists());
+
+        drop(replacement);
+        drop(first);
+        let _ = std::fs::remove_file(path);
+        Ok(())
+    }
+
+    fn test_socket_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "control-plane-rpc-{name}-{}.sock",
+            Uuid::now_v7()
+        ))
+    }
 }

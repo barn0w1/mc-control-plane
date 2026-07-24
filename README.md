@@ -32,6 +32,25 @@ repository名は引き続き`mc-control-plane`を使用します。
 最初の実装では、Rust 1.97 / Edition 2024、Tokio、HTTP/2 over Unix domain socket、JSON-RPC 2.0、
 SQLx/SQLiteを基盤として、`HostClaim`、`Host`、fake providerによるreconciliationを成立させます。
 
+## Current implementation candidate
+
+決定済みの最初のvertical sliceはRust codeとして実装されています。
+現時点ではRust toolchainを使用できない環境で作成したcandidateであり、Rust 1.97.1での`fmt`、`check`、`clippy`、`test`が完了するまではverified implementationとは扱いません。
+
+実装済みの主な境界:
+
+- 四packageのCargo workspace
+- `control`から`control-plane`へのtyped JSON-RPC
+- HTTP/2 prior knowledge over Unix domain socket
+- SQLx/SQLiteによる`HostClaim`と`Host`の永続化
+- 単一workerのHost controller
+- 独立SQLiteを使用するfake provider
+- create/delete結果不明、temporary observation failure、restartのtest candidate
+- databaseの単一application owner lock
+- active Unix socketを誤ってunlinkしないstartup/shutdown処理
+
+詳細とlocal verification手順は[First implementation plan](docs/first-implementation-plan.md)を参照してください。
+
 ## Documentation
 
 設計文書の入口は[docs/README.md](docs/README.md)です。

@@ -23,6 +23,7 @@ CREATE TABLE hosts (
     vcpus INTEGER NOT NULL CHECK (vcpus > 0),
     memory_bytes INTEGER NOT NULL CHECK (memory_bytes > 0),
     storage_bytes INTEGER NOT NULL CHECK (storage_bytes > 0),
+    provider_plan_id TEXT NOT NULL CHECK (length(provider_plan_id) > 0),
     phase TEXT NOT NULL CHECK (phase IN ('pending', 'provisioning', 'ready', 'deleting', 'failed')),
     provider_resource_id TEXT UNIQUE,
     observed_at TEXT,

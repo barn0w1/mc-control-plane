@@ -10,6 +10,7 @@
 - jsonrpsee Tower serviceとHyper HTTP/2 Unix socket integrationがRust 1.97.1でそのままcompileするか
 - dedicated Unix socket上でも`POST /rpc`以外を明示的に拒否するHTTP middlewareが必要か
 - SQLx checked queryへの移行とoffline metadata生成をどのcommitで行うか
+- `Failed` Hostをoperator retry、automatic replacement、Claim recreationのどれで回復させるか
 
 fake provider fault injectionは、最初の実装ではtest-only APIとしてControl Plane process内のtestから使用します。operator RPCには公開しません。
 

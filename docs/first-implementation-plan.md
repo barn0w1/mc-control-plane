@@ -35,8 +35,12 @@ cargo test --workspace --all-features
 - Step 1のworkspace、binary skeleton、shutdown、diagnostics
 - Step 2のtyped `system.info`、HTTP/2 Unix socket client/server、request size、timeout、batch/notification拒否
 - Step 3のembedded migration、single-connection SQLite、HostClaim/Host persistence、独立fake provider database
+- databaseごとのexclusive application-owner lock
 - Step 4のHostClaim/Host RPCとCLI
 - Step 5のsingle-worker reconciliationと主要fault test
+- selected provider planのcreate前永続化
+- Claim deletionとcontroller status writeの競合防止
+- controller開始前のRPC socket bind、active/stale socketの安全な判定、owned socketだけのcleanup
 
 local verification後に残る作業:
 
@@ -154,14 +158,16 @@ process start time
 - embedded migrationをlistener開始前に実行する
 - `HostClaim`と`Host` tableを作成する
 - fake provider用に別SQLite databaseを用意する
-- checked query用のSQLx offline metadataをcommitする
-- database errorをtyped persistence errorへ変換する
+- 最初のcandidateではruntime query APIを使用し、local compile後にstable queryからchecked queryへ移行する
+- database errorをapplication error境界で分類し、internal detailをRPCへ露出しない
+- database pathごとのexclusive file lockをprocess lifetime中保持する
 
 ### Required constraints
 
 - HostClaim ID primary key
 - active Hostは一つのClaimに最大一つ
 - provider resource ownership keyとしてHost IDを一意に扱う
+- provider create前に、選択済みprovider plan IDをHost内部stateへ永続化する
 - generationとobserved generationを非負整数として扱う
 - resource quantityは正値に限定する
 
@@ -234,8 +240,8 @@ fake providerは別SQLite fileに次を持ちます。
 
 1. deletionされていない未充足Claimを読む
 2. provider policy/catalogでplanを選択する
-3. Control Plane Host IDを生成し、Hostを保存する
-4. fake providerへHost IDをownership keyとしてcreateする
+3. Control Plane Host ID、選択plan ID、allocatable capacityを一つのHost内部stateとして保存する
+4. fake providerへ永続化済みHost IDとplan IDを渡してcreateする
 5. create結果に応じて観測またはretryする
 6. provider resource ReadyをHost statusへ反映する
 7. Host ReadyをClaim statusへ反映する
@@ -250,6 +256,10 @@ fake providerは別SQLite fileに次を持ちます。
 - temporary observation failure
 - daemon stop between every persisted transition
 - repeated reconciliation
+- provider create前にplan選択が永続化されていること
+- stale controller statusがconcurrent Claim deletionを取り消せないこと
+- 同じdatabaseを二つのControl Plane processが同時所有できないこと
+- active Unix socketを起動時にunlinkしないこと
 
 ### End-to-end acceptance scenario
 

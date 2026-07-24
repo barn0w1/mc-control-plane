@@ -23,6 +23,7 @@ async fn main() -> anyhow::Result<()> {
 
     let storage = Storage::connect(&config.database_path).await?;
     let provider = FakeProvider::connect(&config.fake_provider_database_path).await?;
+    let rpc_socket = rpc::bind(&config.socket_path, config.socket_mode).await?;
     let reconcile = ReconcileHandle::new();
     let cancellation = CancellationToken::new();
     let started_at = Timestamp::now();
@@ -36,9 +37,7 @@ async fn main() -> anyhow::Result<()> {
     let rpc_context = RpcContext::new(storage.clone(), reconcile, started_at);
 
     let mut controller_task = tokio::spawn(controller.run(cancellation.child_token()));
-    let mut rpc_task = tokio::spawn(rpc::serve(
-        &config.socket_path,
-        config.socket_mode,
+    let mut rpc_task = tokio::spawn(rpc_socket.serve(
         rpc_context,
         cancellation.child_token(),
     ));
@@ -65,20 +64,19 @@ async fn main() -> anyhow::Result<()> {
 
     let primary_result = match exit {
         Exit::Signal(result) => {
-            result?;
-            controller_task.await.context("join Host controller task")??;
-            rpc_task.await.context("join local RPC task")??;
-            Ok(())
+            let controller_result = task_result("Host controller", controller_task.await);
+            let rpc_result = task_result("local RPC", rpc_task.await);
+            result.and(controller_result).and(rpc_result)
         }
         Exit::Controller(result) => {
-            let result = result.context("Host controller task panicked")?;
-            rpc_task.await.context("join local RPC task")??;
-            result
+            let controller_result = task_result("Host controller", result);
+            let rpc_result = task_result("local RPC", rpc_task.await);
+            controller_result.and(rpc_result)
         }
         Exit::Rpc(result) => {
-            let result = result.context("local RPC task panicked")?;
-            controller_task.await.context("join Host controller task")??;
-            result
+            let rpc_result = task_result("local RPC", result);
+            let controller_result = task_result("Host controller", controller_task.await);
+            rpc_result.and(controller_result)
         }
     };
 
@@ -86,6 +84,13 @@ async fn main() -> anyhow::Result<()> {
     provider.close().await;
     tracing::info!("Control Plane stopped");
     primary_result
+}
+
+fn task_result(
+    task_name: &str,
+    result: Result<anyhow::Result<()>, tokio::task::JoinError>,
+) -> anyhow::Result<()> {
+    result.with_context(|| format!("{task_name} task panicked"))?
 }
 
 async fn shutdown_signal() -> anyhow::Result<()> {

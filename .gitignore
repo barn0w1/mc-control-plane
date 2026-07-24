@@ -6,6 +6,8 @@
 *.db
 *.db-shm
 *.db-wal
+*.db.lock
+*.sock
 *.pid
 
 # Local configuration and credentials

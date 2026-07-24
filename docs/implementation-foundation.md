@@ -90,6 +90,10 @@ HTTP/3はQUICとTLSを前提とし、同一machine内のUnix socket RPCでは複
 ### Server implementation
 
 - `tokio::net::UnixListener`でsocketをacceptする
+- migrationとprovider initializationの後、controllerを開始する前にsocketの検証、bind、permission設定を完了する
+- startup時に既存socketへ短いconnection probeを行い、active daemonが応答可能なら起動を拒否する
+- stale socketを削除するのは、Unix socketであり、connectionが`ConnectionRefused`になった場合だけとする
+- shutdown時はdevice/inodeが自分のbind時点と一致するsocketだけを削除する
 - `hyper::server::conn::http2`で各connectionを駆動する
 - `hyper-util`のTokio adapterを使用する
 - `jsonrpsee`の`RpcModule`とTower serviceでJSON-RPCをparse、dispatchする
@@ -198,7 +202,10 @@ UUIDv7のcanonical stringはtime fieldが先頭にあるため、同じ表現同
 SQLite databaseを開くのは`control-plane`だけです。
 `control`と`host-agent`はdatabase pathを知りません。
 
-controllerはSQLx typeへ直接依存せず、`persistence` moduleがdomain/resource型との変換を所有します。
+`control-plane`はdatabase fileに対応する`<database>.lock`を開き、process lifetime中はexclusive file lockを保持します。
+同じdatabaseを使う二つ目のControl Plane processはlistenerやcontrollerを開始する前に失敗します。lock file自体が残っていることではなく、保持中のOS file lockをownershipの根拠にします。
+
+controllerはSQLx typeへ直接依存せず、`storage` moduleがdomain/resource型との変換を所有します。
 ただし、まだ独立crateにはしません。
 
 ## Diagnostics

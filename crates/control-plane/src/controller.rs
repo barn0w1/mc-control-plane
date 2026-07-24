@@ -81,15 +81,23 @@ where
                 break;
             }
 
+            let mut reached_step_limit = true;
             for _ in 0..MAX_STEPS_PER_WAKE {
                 match self.reconcile_once().await {
                     Ok(ReconcileResult::Progress) => {}
-                    Ok(ReconcileResult::Idle) => break,
+                    Ok(ReconcileResult::Idle) => {
+                        reached_step_limit = false;
+                        break;
+                    }
                     Err(error) => {
+                        reached_step_limit = false;
                         tracing::error!(error = ?error, "Host reconciliation failed unexpectedly");
                         break;
                     }
                 }
+            }
+            if reached_step_limit {
+                self.handle.wake();
             }
         }
 
@@ -168,14 +176,24 @@ where
             .select_plan(&claim.resource.spec.resources)
             .await
         {
-            Ok(Some(plan)) => {
-                let _host = self
-                    .storage
-                    .ensure_host(claim.resource.id, plan.resources)
-                    .await?;
-                tracing::info!(plan_id = %plan.id, "assigned a Host to HostClaim");
-                Ok(ReconcileResult::Progress)
-            }
+            Ok(Some(plan)) => match self
+                .storage
+                .ensure_host(claim.resource.id, &plan.id, plan.resources)
+                .await
+            {
+                Ok(_host) => {
+                    tracing::info!(plan_id = %plan.id, "assigned a Host to HostClaim");
+                    Ok(ReconcileResult::Progress)
+                }
+                Err(AppError::Conflict { .. } | AppError::NotFound { .. }) => {
+                    tracing::debug!(
+                        "HostClaim changed while assigning a Host; discarding stale reconciliation"
+                    );
+                    self.handle.wake();
+                    Ok(ReconcileResult::Idle)
+                }
+                Err(error) => Err(error),
+            },
             Ok(None) => {
                 let now = now_timestamp();
                 let mut changed = false;
@@ -215,7 +233,7 @@ where
                 );
                 claim.retry = RetryState::default();
                 if changed {
-                    self.storage.save_claim(&claim).await?;
+                    self.persist_claim_status(&claim).await?;
                     tracing::warn!("HostClaim is unsatisfiable by the current provider catalog");
                     Ok(ReconcileResult::Progress)
                 } else {
@@ -224,7 +242,7 @@ where
             }
             Err(error) => {
                 schedule_claim_provider_error(&mut claim, error, now_ms);
-                self.storage.save_claim(&claim).await?;
+                self.persist_claim_status(&claim).await?;
                 Ok(ReconcileResult::Progress)
             }
         }
@@ -250,7 +268,7 @@ where
                             ),
                         );
                         self.storage.save_host(&host).await?;
-                        self.storage.save_claim(&claim).await?;
+                        self.persist_claim_status(&claim).await?;
                         return Ok(ReconcileResult::Progress);
                     }
                 }
@@ -258,7 +276,7 @@ where
                 let unchanged = provider_observation_is_stable(&host, &resource);
                 apply_provider_observation(&mut claim, &mut host, resource);
                 self.storage.save_host(&host).await?;
-                self.storage.save_claim(&claim).await?;
+                self.persist_claim_status(&claim).await?;
                 Ok(if unchanged {
                     ReconcileResult::Idle
                 } else {
@@ -271,37 +289,15 @@ where
                 {
                     mark_provider_absent(&mut claim, &mut host);
                     self.storage.save_host(&host).await?;
-                    self.storage.save_claim(&claim).await?;
+                    self.persist_claim_status(&claim).await?;
                     return Ok(ReconcileResult::Progress);
                 }
-
-                let plan = match self.provider.select_plan(&host.resource.allocatable_resources).await {
-                    Ok(Some(plan)) => plan,
-                    Ok(None) => {
-                        mark_host_failed(
-                            &mut claim,
-                            &mut host,
-                            "CatalogChanged",
-                            "The provider catalog no longer contains a plan for this Host."
-                                .to_owned(),
-                        );
-                        self.storage.save_host(&host).await?;
-                        self.storage.save_claim(&claim).await?;
-                        return Ok(ReconcileResult::Progress);
-                    }
-                    Err(error) => {
-                        schedule_host_provider_error(&mut claim, &mut host, error, now_ms);
-                        self.storage.save_host(&host).await?;
-                        self.storage.save_claim(&claim).await?;
-                        return Ok(ReconcileResult::Progress);
-                    }
-                };
 
                 host.resource.status.phase = HostPhase::Provisioning;
                 host.retry = RetryState::default();
                 self.storage.save_host(&host).await?;
 
-                match self.provider.create(host.resource.id, &plan).await {
+                match self.provider.create(host.resource.id, &host.provider_plan_id).await {
                     Ok(CreateOutcome::Created(resource)) => {
                         apply_provider_observation(&mut claim, &mut host, resource);
                     }
@@ -319,21 +315,32 @@ where
                     }
                 }
                 self.storage.save_host(&host).await?;
-                self.storage.save_claim(&claim).await?;
+                self.persist_claim_status(&claim).await?;
                 Ok(ReconcileResult::Progress)
             }
             Err(error) => {
                 schedule_host_provider_error(&mut claim, &mut host, error, now_ms);
                 self.storage.save_host(&host).await?;
-                self.storage.save_claim(&claim).await?;
+                self.persist_claim_status(&claim).await?;
                 Ok(ReconcileResult::Progress)
             }
         }
     }
 
+    async fn persist_claim_status(&self, claim: &HostClaimRecord) -> Result<(), AppError> {
+        if !self.storage.save_claim_status(claim).await? {
+            tracing::debug!(
+                host_claim_id = %claim.resource.id,
+                "discarded stale HostClaim status after a concurrent mutation"
+            );
+            self.handle.wake();
+        }
+        Ok(())
+    }
+
     async fn reconcile_deleting_claim(
         &self,
-        claim: HostClaimRecord,
+        mut claim: HostClaimRecord,
         now_ms: i64,
     ) -> Result<ReconcileResult, AppError> {
         let Some(host_id) = claim.resource.status.host_id else {
@@ -354,6 +361,24 @@ where
                 Ok(ReconcileResult::Progress)
             }
             Ok(ProviderObservation::Present(resource)) => {
+                if let Some(expected) = host.resource.status.provider_resource_id.as_deref() {
+                    if expected != resource.id {
+                        mark_host_failed(
+                            &mut claim,
+                            &mut host,
+                            "ProviderOwnershipConflict",
+                            format!(
+                                "Host recorded provider resource {expected}, but ownership lookup returned {}.",
+                                resource.id
+                            ),
+                        );
+                        host.retry.next_reconcile_at_unix_ms = Some(i64::MAX);
+                        self.storage.save_host(&host).await?;
+                        self.persist_claim_status(&claim).await?;
+                        return Ok(ReconcileResult::Progress);
+                    }
+                }
+
                 host.resource.status.phase = HostPhase::Deleting;
                 host.resource.status.provider_resource_id = Some(resource.id);
                 host.resource.status.observed_at = Some(now_timestamp());
@@ -602,9 +627,11 @@ fn schedule_claim_provider_error(
     error: ProviderError,
     now_ms: i64,
 ) {
+    let now = now_timestamp();
+    claim.resource.status.observed_generation = claim.resource.generation;
+
     match error {
         ProviderError::Definitive { message } => {
-            let now = now_timestamp();
             claim.retry = RetryState {
                 attempt: claim.retry.attempt,
                 next_reconcile_at_unix_ms: Some(i64::MAX),
@@ -628,7 +655,18 @@ fn schedule_claim_provider_error(
             claim.retry.next_reconcile_at_unix_ms =
                 Some(retry_deadline(now_ms, claim.retry.attempt));
             claim.retry.last_error_kind = Some("ProviderUnavailable".to_owned());
-            claim.retry.last_error_message = Some(message);
+            claim.retry.last_error_message = Some(message.clone());
+            set_condition(
+                &mut claim.resource.status.conditions,
+                new_condition(
+                    "Accepted",
+                    ConditionStatus::Unknown,
+                    "ProviderUnavailable",
+                    message,
+                    claim.resource.generation,
+                    now,
+                ),
+            );
         }
     }
 }
@@ -759,6 +797,36 @@ mod tests {
             Err(AppError::NotFound { .. })
         ));
         assert_eq!(storage.list_hosts().await?.len(), 1);
+
+        storage.close().await;
+        provider.close().await;
+        paths.remove();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persists_selected_provider_plan_before_external_create() -> anyhow::Result<()> {
+        let paths = TestPaths::new("persisted-provider-plan");
+        let storage = Storage::connect(&paths.control_plane).await?;
+        let provider = crate::provider::FakeProvider::connect(&paths.provider).await?;
+        let controller = HostController::new(
+            storage.clone(),
+            provider.clone(),
+            ReconcileHandle::new(),
+            Duration::from_millis(10),
+        );
+
+        let claim_id = HostClaimId::new();
+        storage.create_claim(claim_id, small_spec()).await?;
+        assert_eq!(controller.reconcile_once().await?, ReconcileResult::Progress);
+
+        let host = storage
+            .get_host_for_claim(claim_id)
+            .await?
+            .expect("Host must be assigned");
+        assert_eq!(host.resource.status.phase, HostPhase::Pending);
+        assert_eq!(host.provider_plan_id, "fake-2c-4g-40g");
+        assert_eq!(provider.resource_count().await?, 0);
 
         storage.close().await;
         provider.close().await;

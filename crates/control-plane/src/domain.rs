@@ -15,6 +15,7 @@ pub struct HostClaimRecord {
 #[derive(Clone, Debug)]
 pub struct HostRecord {
     pub resource: Host,
+    pub provider_plan_id: String,
     pub retry: RetryState,
 }
 

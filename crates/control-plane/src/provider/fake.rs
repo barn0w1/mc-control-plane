@@ -1,5 +1,6 @@
 use std::{path::Path, str::FromStr, time::Duration};
 
+use anyhow::Context;
 use control_plane_protocol::{HostId, HostResources};
 use jiff::Timestamp;
 use sqlx::{
@@ -29,6 +30,11 @@ pub struct FakeProvider {
 
 impl FakeProvider {
     pub async fn connect(path: &Path) -> anyhow::Result<Self> {
+        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create fake provider directory {}", parent.display()))?;
+        }
+
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)
@@ -40,13 +46,17 @@ impl FakeProvider {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(options)
-            .await?;
+            .await
+            .with_context(|| format!("open fake provider database {}", path.display()))?;
 
         sqlx::migrate!("./migrations/fake-provider")
             .run(&pool)
-            .await?;
+            .await
+            .context("apply fake provider database migrations")?;
 
-        seed_catalog(&pool).await?;
+        seed_catalog(&pool)
+            .await
+            .context("seed fake provider plan catalog")?;
         Ok(Self { pool })
     }
 
@@ -221,7 +231,7 @@ impl HostProvider for FakeProvider {
     async fn create(
         &self,
         host_id: HostId,
-        plan: &Plan,
+        plan_id: &str,
     ) -> Result<CreateOutcome, ProviderError> {
         if self.consume_fault(FAULT_CREATE_DEFINITIVE).await? {
             return Err(definitive("injected definitive create failure"));
@@ -230,7 +240,30 @@ impl HostProvider for FakeProvider {
             return Err(transient("injected transient create failure"));
         }
         if let Some(existing) = self.resource_by_host(host_id).await? {
+            let existing_plan = sqlx::query_scalar::<_, String>(
+                "SELECT plan_id FROM provider_resources WHERE host_id = ?",
+            )
+            .bind(host_id.to_string())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|error| transient(error.to_string()))?;
+            if existing_plan != plan_id {
+                return Err(definitive(format!(
+                    "Host {host_id} already owns a provider resource with plan {existing_plan:?}, not {plan_id:?}"
+                )));
+            }
             return Ok(CreateOutcome::Created(existing));
+        }
+
+        let plan_exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM plans WHERE id = ? AND enabled = 1",
+        )
+        .bind(plan_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|error| transient(error.to_string()))?;
+        if plan_exists != 1 {
+            return Err(definitive(format!("unknown or disabled provider plan {plan_id:?}")));
         }
 
         let lose_response = self.consume_fault(FAULT_CREATE_RESPONSE_LOSS).await?;
@@ -248,7 +281,7 @@ impl HostProvider for FakeProvider {
         )
         .bind(&resource.id)
         .bind(resource.host_id.to_string())
-        .bind(&plan.id)
+        .bind(plan_id)
         .bind(Timestamp::now().to_string())
         .execute(&self.pool)
         .await
