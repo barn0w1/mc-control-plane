@@ -50,7 +50,7 @@ SQLx/SQLiteを基盤として、`HostClaim`、`Host`、fake providerによるrec
 - active Unix socketを誤ってunlinkしないstartup/shutdown処理
 
 実装範囲、runtime flow、保証と未実装部分は[Current implementation](docs/current-implementation.md)を参照してください。
-実装計画と残作業は[First implementation plan](docs/first-implementation-plan.md)にあります。
+Host管理の完成形に関する方向は[Host management direction](docs/host-management-direction.md)、実装計画と残作業は[First implementation plan](docs/first-implementation-plan.md)にあります。
 
 ## Documentation
 

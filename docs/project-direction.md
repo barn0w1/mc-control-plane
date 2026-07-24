@@ -32,10 +32,12 @@ provider APIやcontroller内部実装も直接呼びません。
 ## Control model
 
 上位componentは「Linodeを作成する」と命令しません。必要なHostを`HostClaim`として提示します。
-Host controllerは、保存されたClaimと観測したHostを比較し、必要なHost数へ継続的に収束します。
+Host controllerは、daemon稼働中に継続責任を持つcontrol loopとして、保存されたClaimと観測したHostを比較し、必要なHost数へ継続的に収束します。eventやtimerは処理を早める内部mechanismであり、event配送を正しさの前提にしません。
 
 このmodelでは、process再起動や同じreconciliationの再実行を通常動作として扱います。
-外部操作の結果が不明な場合は、無条件に再実行せず、外部状態を再観測してから判断します。
+外部操作の結果が不明な場合は、無条件に再実行せず、期限付きで外部状態を再観測してから判断します。期待状態へ収束しないHost attemptはterminal failureとし、所有を確認できる課金resourceを優先的にcleanupします。
+
+Host managementの完成形に関する方向は[Host management direction](host-management-direction.md)を参照してください。
 
 ## Scope discipline
 
