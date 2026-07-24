@@ -12,3 +12,5 @@ ADRには、現在採用している大きな方針だけを記録します。
 | [0005](0005-no-development-compatibility.md) | Accepted | Stable release前は後方互換性を保証しない |
 | [0006](0006-passwordless-restic-repositories.md) | Accepted | Data repositoryにpasswordless resticを使用する |
 | [0007](0007-naming-and-initial-workspace.md) | Accepted | 名称と最初のCargo workspace境界を定める |
+| [0008](0008-local-rpc-http2-over-unix-socket.md) | Accepted | Local operator RPCにHTTP/2 over Unix domain socketを使用する |
+| [0009](0009-hostclaim-allocatable-resources.md) | Accepted | HostClaimはallocatable CPU、memory、local storageだけを要求する |

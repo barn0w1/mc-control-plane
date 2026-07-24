@@ -29,8 +29,8 @@ repository名は引き続き`mc-control-plane`を使用します。
 - daemonやHostの再起動、通信断、provider APIの不確実な結果から安全に再開する
 - 通常操作は`control`からRPCを通じて行い、databaseやproviderを直接操作しない
 
-最初の実装では、LinodeやHostとの通信へ進む前に、local RPC、SQLite、`HostClaim`、`Host`、
-fake providerによるreconciliationを成立させます。
+最初の実装では、Rust 1.97 / Edition 2024、Tokio、HTTP/2 over Unix domain socket、JSON-RPC 2.0、
+SQLx/SQLiteを基盤として、`HostClaim`、`Host`、fake providerによるreconciliationを成立させます。
 
 ## Documentation
 

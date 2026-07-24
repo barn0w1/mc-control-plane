@@ -16,6 +16,8 @@
 | Controller | desired stateとobserved stateを継続的に収束させるcomponent |
 | Reconciliation | Controllerが差分を観測し必要な変更を行う一回の処理 |
 | HostClaim | 一台のHostに対する永続的かつ排他的な需要 |
+| Allocatable capacity | OSやHost Agent用reserveを除き、workloadへ提供可能なCPU、memory、storage |
+| Provisioning policy | region、plan許可範囲、network、image、bootstrapなどControl Plane deploymentが所有する固定方針 |
 | Host | Control Planeがidentityとlifecycleを所有する論理実行環境 |
 | Host ID | Control Planeが発行するHostの内部identity |
 | Provider resource ID | Linodeなど外部providerが発行するidentity |

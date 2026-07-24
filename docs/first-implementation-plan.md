@@ -2,18 +2,21 @@
 
 ## Objective
 
-最初の実装では、実cloudやHost通信へ進む前に、次の基盤を一つのvertical sliceとして成立させます。
+最初の実装では、実cloudやHost通信へ進む前に、次のvertical sliceを完成させます。
 
 ```text
 control
   -> JSON-RPC 2.0
+  -> HTTP/2 over Unix domain socket
 control-plane
-  -> SQLite
+  -> SQLx / SQLite
   -> Host controller
   -> fake provider
 ```
 
-完成時には、`HostClaim`を作成するとcontrollerが`Host`を生成し、Claimを削除すると要求された状態へ再び収束します。
+完成時には、`HostClaim`を作成するとcontrollerが一台の`Host`とfake provider resourceへ収束し、Claimを削除すると安全に解放・削除へ収束します。
+
+詳細なlibraryとtransportの選択は[Implementation foundation](implementation-foundation.md)、resource shapeは[HostClaim specification](host-claim-spec.md)を正本とします。
 
 ## Initial workspace
 
@@ -27,142 +30,233 @@ crates/
   control-cli/
 ```
 
-### `control-plane-protocol`
+workspace共通設定:
 
-RPC boundaryに現れる共有型だけを所有するlibrary packageです。
+```toml
+[workspace]
+resolver = "3"
 
-- JSON-RPC methodのparamsとresult
-- wire上に現れるIDとerror data
-- protocol/build information
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"
+```
 
-controller、database entity、provider type、business ruleは置きません。
-JSON-RPC parserやdispatcherは、利用可能な標準準拠libraryを優先し、独自実装しません。
+### Dependency direction
 
-### `control-plane`
+```text
+control-plane-protocol
+  ^         ^         ^
+  |         |         |
+control-plane  host-agent  control-cli
+```
 
-`control-plane` binaryを生成します。
-
-- RPC server
-- configurationとlifecycle
-- SQLite migrationsとpersistence
-- HostClaimとHost
-- Host controller
-- fake provider
-
-初期段階ではstorage、controller、providerを別crateへ分割せず、このpackage内のmoduleにします。
-
-### `host-agent`
-
-`host-agent` binaryを生成します。
-最初のvertical sliceではversion表示と最小のprocess skeletonだけを持ち、Control Planeとの通信はまだ実装しません。
-別Hostへ配布されるsecurity boundaryであるため、最初から独立packageにします。
-
-### `control-cli`
-
-`control` binaryを生成する薄いRPC clientです。
-
-- command-line parsing
-- RPC request
-- human-readable output
-- machine-readable JSON output
-- exit status
-
-business rule、database、provider integrationを持ちません。
+- protocol packageは他のworkspace packageへ依存しない
+- CLIとHost AgentはControl Plane implementationへ依存しない
+- `control-plane`内部のstorage、controller、providerは最初はmoduleで分離する
 
 ## Step 1: Workspace and process skeleton
 
+### Work
+
 - root Cargo workspaceを作成する
 - 四つのpackageを追加する
+- workspace package metadata、dependency versions、lint policyを定義する
 - 各binaryが`--version`と`--help`を返す
-- common package metadataと最小のlint policyを設定する
-- `control-plane`が起動、signal受信、正常終了できる
+- Tokio runtimeを初期化する
+- `tracing` subscriberを初期化する
+- `control-plane`がSIGINT/SIGTERMを受信し、CancellationTokenによって正常終了する
+- `host-agent`はprocess skeletonだけを持ち、network通信をまだ実装しない
 
-Acceptance:
+### Acceptance
 
-- workspace全体をbuild、format、lint、testできる
-- package間のdependencyが意図した方向だけになっている
-- `host-agent`が`control-plane`内部moduleへ依存していない
+- `cargo fmt`, `check`, `clippy`, `test`がworkspace全体で成功する
+- own codeに`unsafe`がない
+- package dependencyが意図した方向だけになっている
+- structured logでstartupとshutdownが確認できる
+- `host-agent`と`control-cli`が`control-plane` packageへ依存していない
 
-## Step 2: Minimal local RPC
+## Step 2: Minimal local JSON-RPC
 
-- JSON-RPC 2.0 request/responseを使用する
-- local transportはHTTP request/responseをUnix domain socket上で運ぶ
-- 独自message framingは作らない
+### Work
+
+- Unix domain socket listenerを実装する
+- Hyper HTTP/2 prior-knowledge connectionを実装する
+- jsonrpsee Tower serviceをtransportへ接続する
+- request body、timeout、concurrencyの上限を設ける
+- `control-plane-protocol`でtyped RPC APIを定義する
 - 最初のmethodとして`system.info`を実装する
-- `control system info`からdaemonのbuildとprotocol informationを表示する
+- `control system info`を実装する
+- human outputと`--output json`を実装する
 
-Acceptance:
+`system.info`は少なくとも次を返します。
+
+```text
+system name
+binary version
+Rust version used to build
+protocol version
+process start time
+```
+
+### Protocol restrictions
+
+- `POST /rpc`のみ
+- HTTP/2のみ
+- one JSON-RPC request per HTTP request
+- batchなし
+- notificationなし
+- object paramsのみ
+- UUIDv7 string request ID
+
+### Acceptance
 
 - CLIはRPC以外でdaemon stateへ触れない
-- malformed requestがdaemonをpanicさせない
-- JSON-RPC errorがCLIのexit statusと表示へ一貫して変換される
+- malformed HTTP、oversized body、invalid JSON、invalid JSON-RPCがdaemonをpanicさせない
+- unknown methodとinvalid paramsがJSON-RPC errorになる
+- RPC errorがCLIのexit statusとhuman/JSON outputへ一貫して変換される
 - daemon再起動後にCLIが再接続できる
+- Unix socket permissionで許可されていないlocal userを拒否できる構造になっている
 
-このlocal transportの選択はHost transportを決定するものではありません。
+## Step 3: SQLite foundation
 
-## Step 3: Persistence and minimal resources
+### Work
 
-- SQLiteを`control-plane`だけが開く
-- development中は破棄可能な初期migrationを作る
-- `HostClaim`と`Host`の最小spec/statusを定義する
-- Claimのcreate、get、list、delete RPCを追加する
-- Hostのget、list RPCを追加する
-- spec変更とstatus観測を区別する
+- SQLx SQLite bundled driverを追加する
+- max connection 1のpoolを構成する
+- WAL、FULL synchronous、foreign key、busy timeoutを設定する
+- embedded migrationをlistener開始前に実行する
+- `HostClaim`と`Host` tableを作成する
+- fake provider用に別SQLite databaseを用意する
+- checked query用のSQLx offline metadataをcommitする
+- database errorをtyped persistence errorへ変換する
 
-Acceptance:
+### Required constraints
 
-- daemon再起動後もClaimとHostを読み戻せる
-- CLIや`host-agent`がdatabase fileを開かない
-- database constraintで明確な不変条件を保護する
-- schema migrationの後方互換性は提供しない
+- HostClaim ID primary key
+- active Hostは一つのClaimに最大一つ
+- provider resource ownership keyとしてHost IDを一意に扱う
+- generationとobserved generationを非負整数として扱う
+- resource quantityは正値に限定する
 
-最小fieldはこのstepの実装直前に決めます。将来を予測してresourceを増やしません。
+### Acceptance
 
-## Step 4: Host reconciliation with a fake provider
+- daemon再起動後にresourceを読み戻せる
+- migration失敗時にRPC listenerやcontrollerを開始しない
+- CLIやHost Agentはdatabase fileを開かない
+- transaction中にfake provider I/Oを実行しない
+- 同じClaim ID、同じspecのcreateがidempotent
+- 同じClaim ID、異なるspecのcreateがconflict
 
-- controllerが保存済みHostClaimを継続的に観測する
-- 未充足Claimに対してHostを割り当てる
-- fake providerが外部resourceの作成、観測、削除を模擬する
-- fake providerの状態はControl Planeのresource tableとは独立して観測できるようにする
-- Claim削除時は最初の実装では即時削除へ収束する
-- idle保持と再利用は後続stepで追加する
+## Step 4: HostClaim RPC
 
-Acceptance scenario:
+### Work
+
+- `host.claim.create`
+- `host.claim.get`
+- `host.claim.list`
+- `host.claim.delete`
+- `host.get`
+- `host.list`
+- Claim condition model
+- asynchronous deletion timestampとfinal deletion
+
+### CLI
+
+```text
+control host claim create --vcpus 2 --memory 4GiB --storage 40GiB
+control host claim create --id <claim-id> --vcpus 2 --memory 4GiB --storage 40GiB
+control host claim get <claim-id>
+control host claim list
+control host claim delete <claim-id>
+control host get <host-id>
+control host list
+```
+
+### Acceptance
+
+- resource quantityがwireではcanonical bytesになる
+- create responseを失った想定で同じIDを再送してもduplicateができない
+- unsatisfiable Claimを保存し、`Accepted=False`として表示できる
+- delete request後もcleanup完了までClaimを観測できる
+- list orderがdeterministicである
+
+## Step 5: Host reconciliation with fake provider
+
+### Controller loop
+
+- persisted Claim/Host stateをlevel-triggeredに観測する
+- RPC mutation時の`Notify`とperiodic scanの両方でreconcileをwakeする
+- 初期実装はcontroller workerを一つにし、同じresourceの並行処理を構造的に避ける
+- 一回のreconcileで長いsleepをしない
+- retry attempt、next reconcile time、last classified errorを永続stateとして持つ
+- 一回のreconciliationで外部mutationを最大一つにする
+- external resultをtransaction外で取得し、次のtransactionで反映する
+
+### Fake provider
+
+fake providerは別SQLite fileに次を持ちます。
+
+- plan catalog
+- provider resources
+- Host ID ownership key
+- lifecycle state
+- capacityとhourly price
+- fault injection state
+
+### Reconciliation flow
+
+1. deletionされていない未充足Claimを読む
+2. provider policy/catalogでplanを選択する
+3. Control Plane Host IDを生成し、Hostを保存する
+4. fake providerへHost IDをownership keyとしてcreateする
+5. create結果に応じて観測またはretryする
+6. provider resource ReadyをHost statusへ反映する
+7. Host ReadyをClaim statusへ反映する
+8. deletion ClaimではHost/provider resource削除を進める
+9. provider不存在確認後にHostとClaimをfinalizeする
+
+### Required fault tests
+
+- create前のdefinitive failure
+- create成功後のresponse loss
+- delete成功後のresponse loss
+- temporary observation failure
+- daemon stop between every persisted transition
+- repeated reconciliation
+
+### End-to-end acceptance scenario
 
 1. `control host claim create`を二回実行する
-2. 二つのHostClaimと二つのHostがReadyになる
+2. 二つのClaim、Host、provider resourceがReadyになる
 3. `control-plane`を再起動する
-4. duplicate Hostを作らず同じ状態へ収束する
-5. 一つのClaimを削除する
-6. 対応するHostが削除状態へ収束する
+4. duplicate Host/provider resourceを作らず同じ状態へ収束する
+5. 一つのClaimをdeleteする
+6. 対応Hostとprovider resourceが削除され、Claimがfinalizeされる
 7. 残るClaimとHostには影響しない
-
-追加tests:
-
-- reconcileを何度実行しても余分なHostを作らない
-- create結果不明を模擬した後に再観測して重複を避ける
-- delete結果不明を模擬した後に不存在を確認する
-- daemonを主要なstate transition間で再起動できる
-- 複数Claimを決定的に扱える
+8. create/delete response lossを注入しても同じ最終状態へ収束する
 
 ## First implementation complete
 
-次を満たした時点で、最初の実装を完了とします。
+次を満たした時点で完了とします。
 
-- 四packageの境界が機能している
-- `control`と`control-plane`の最小RPCが通る
-- SQLiteからstateを復旧できる
+- Rust 1.97 / Edition 2024の四package workspaceが成立する
+- Tokio process lifecycleとstructured diagnosticsが成立する
+- HTTP/2 over Unix socket上でtyped JSON-RPCが通る
+- SQLx/SQLiteからstateを復旧できる
+- HostClaim specとdelete lifecycleが実装される
 - HostClaimからHostへのlevel-triggered reconciliationが動く
-- fake providerでrestartとoutcome-unknownをtestできる
-- Linode、Host通信、mTLS、idle reuseを追加できる明確なextension pointがある
+- fake providerがControl Plane stateから独立している
+- restartと`OutcomeUnknown`を自動testできる
+- Linode adapterとHost Agent communicationを後から追加できる境界がある
 
 ## Explicitly deferred
 
 - Linode API integration
 - `host-agent` enrollmentと通信
-- mTLSとprivate PKI
+- TLS/mTLSとprivate PKI
 - durable Host command delivery
 - idle Host reuseとbilling-aware retention
+- mutable HostClaim spec
 - restic、object storage、Minecraft workload
-- OpenRPC生成
+- OpenRPC document生成
 - remote operator API

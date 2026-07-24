@@ -1,41 +1,47 @@
 # Open questions
 
-現在の実装に必要になるまで、次の詳細は未確定とします。
-質問を解決するときは、既存の標準や成熟したlibraryを先に調査します。
+最初のworkspaceに必要なtoolchain、library、local RPC、SQLite、HostClaim specは決定済みです。
+詳細は[Implementation foundation](implementation-foundation.md)と[HostClaim specification](host-claim-spec.md)を参照してください。
 
-## Before implementing the first workspace
+質問を解決するときは、既存の標準と成熟したlibraryを先に調査し、実装直前に必要な範囲だけを決めます。
 
-- Rust toolchain versionとMSRVをどう設定するか
-- JSON-RPC 2.0 server/clientにどのmaintained libraryを使用するか
-- HTTP over Unix domain socketにどのHTTP stackを使用するか
-- async runtime、logging、CLI parsing、SQLite libraryを何にするか
-- 最初のHostClaim specに本当に必要なfieldは何か
-- fake providerの独立状態をtestでどのように表現するか
+## During the first implementation
 
-これらは最初の実装を開始する直前に決定します。
+- jsonrpsee Tower serviceとHyper HTTP/2 Unix socket integrationに、library bugまたは不自然なadapter boundaryがないか
+- fake provider fault injection APIをtest-only moduleとRPCのどちらで公開するか
+- SQLx checked queryのoffline metadata運用をCIでどう検証するか
+
+これらは基本方針を変更せず、実装を進めながら決められます。
 
 ## Before Linode integration
 
 - official SDK、generated client、direct HTTP clientのどれを使用するか
-- ownership metadataとresource discoveryをどう表現するか
-- create/deleteのoutcome-unknownをどのprovider情報で解決するか
+- allowed plan family/type policyをconfigurationでどう表現するか
+- system reserved CPU、memory、storageの初期値
+- ownership metadataとresource discoveryをLinode tag/labelへどう符号化するか
+- create/deleteの`OutcomeUnknown`をどのprovider observationで解決するか
+- Linode type catalogとpriceをどの頻度でrefreshするか
 
 ## Before host-agent communication
 
-- Host transportをHTTPS long polling、HTTP/2、WebSocketなどのどれにするか
-- mTLSのcertificate profile、発行、rotation、失効をどう設計するか
-- enrollmentとHost identityをどうbindingするか
-- command deliveryとlocal journalの最小protocolは何か
+- Host transportをHTTPS request/response、long polling、streamingのどれにするか
+- HTTP/2を継続するか、Host通信に別transportが必要か
+- mTLS certificate profile、発行、rotation、失効
+- enrollmentとHost identityのbinding
+- command deliveryとlocal journalの最小protocol
+- Host Agentが報告するcapabilityとhealth model
 
 ## Before idle Host reuse
 
-- どの条件をHost compatibilityとして扱うか
-- 再利用前に何をsanitizationするか
-- Linodeの課金境界をどの時刻から判断するか
-- idle保持時間、最大台数、削除marginをどう設定するか
+- ClaimとHostのallocationを独立resourceへ分離する必要があるか
+- compatibilityをCPU/memory/storage以外の何で判定するか
+- 再利用前のsanitization contract
+- Linodeの課金境界をどのprovider timestampから判断するか
+- idle保持時間、最大台数、削除margin
 
 ## Before the Data layer
 
 - passwordless restic repositoryへのtemporary credential発行方法
 - repository namespaceとownership
 - snapshot verificationとretention
+- workloadへ提示するstorage requirementとsnapshot size estimateの関係
