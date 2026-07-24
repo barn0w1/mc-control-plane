@@ -6,6 +6,7 @@
 | Term | Meaning |
 | --- | --- |
 | Control Plane | system全体の名称 |
+| Host Control System v1 | Akamai Cloud上のGNU/Linux Hostを、Claimから確保、認証、観測、解放、再利用、削除、cost controlまで管理する中期checkpoint |
 | `control-plane` | stateとcontrollerを所有する中央daemon |
 | `host-agent` | 管理対象Hostに常駐する将来のdaemon |
 | `control` | operator向けRPC CLI client |

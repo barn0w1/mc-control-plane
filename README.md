@@ -20,17 +20,16 @@ repository名は引き続き`mc-control-plane`を使用します。
 
 ## Current goal
 
-中期目標は、Host layerをControl Planeだけで完全に管理できることです。
+中期checkpointは、**Host Control System v1**を完成させることです。
 
-- clientが`HostClaim`を作成・削除できる
-- controllerが必要なHost数へ自動的に収束する
-- HostのidentityとAkamai Cloud LinodeをControl Planeが管理する
-- Claim解放後の再利用または削除をHost subsystemが判断する
-- daemonやHostの再起動、通信断、Akamai APIの観測結果から状態を再構築する
-- 通常操作は`control`からRPCを通じて行い、databaseやproviderを直接操作しない
+これはMinecraft機能のためだけの内部部品ではなく、Akamai Cloud上のGNU/Linux実行環境を、
+HostClaimから確保、認証、観測、解放、再利用、削除、cost controlまで管理する独立したsubsystemです。
 
-最初の実装では、Rust 1.97 / Edition 2024、Tokio、HTTP/2 over Unix domain socket、JSON-RPC 2.0、
-SQLx/SQLiteを基盤として、`HostClaim`、`Host`、fake providerによるreconciliationを成立させます。
+一つのHostClaimは一台の排他的Hostを要求します。複数Claimを一台へpackingしません。
+Controllerはdaemon稼働中に自律的に状態を観測し、operatorによる手動retryを前提とせず収束を続けます。
+解決不能な外部不整合はCriticalとして停止し、異常な課金resourceの処分は別責務のCostControllerがpolicyに従って行います。
+
+完成条件と非目標は[Host Control System milestone](docs/host-control-milestone.md)を参照してください。
 
 ## Current implementation
 

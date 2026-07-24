@@ -2,8 +2,12 @@
 
 ## Purpose
 
-Control Planeは、上位layerから提示されたresource需要を保存し、controllerによって実際のresourceを要求状態へ収束させます。
-最初の対象はHostです。Minecraft、workload、data managementはHost layerが成立した後に追加します。
+Control Planeは、複数のresource management subsystemを一つのdaemon内で連携させる管理systemです。
+各subsystemは、自分が所有するresource、controller、外部境界を持ち、上位layerとは永続resourceとstatusを通じて連携します。
+
+最初の中期checkpointは、独立して利用可能な**Host Control System v1**です。
+Akamai Cloud上のGNU/Linux実行環境について、HostClaimから確保、認証、観測、解放、再利用、削除、cost controlまでを所有します。
+Minecraft、workload、data managementは、このHost subsystemが完成した後に上位layerとして追加します。
 
 ## Foundation
 

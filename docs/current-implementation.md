@@ -21,7 +21,7 @@ control-plane
 `HostClaim`を作成すると、Control Planeがprovider planを選択し、論理`Host`とfake provider resourceを作成して`Ready`へ収束させます。
 Claimを削除すると、provider resourceの不存在を確認した後にHostとClaimをfinalizeします。
 
-これはHost control milestone全体の完成ではありません。Linode、Host Agent通信、Host再利用はまだ含まれません。
+これは[Host Control System v1](host-control-milestone.md)の完成ではありません。Linode、Host Agent通信、Host再利用、CostControllerはまだ含まれません。
 
 
 ## Direction change after this vertical slice
@@ -294,8 +294,9 @@ source treeには20個のRust testがあります。
 
 したがって、現在達成しているのは、**Host control architectureのlocal simulationとdurable reconciliation foundation**です。
 
-Host packingは現在も将来もscope外です。一つのHostClaimは一つの排他的Hostを要求します。Host managementの完成形に関する方向は[Host management direction](host-management-direction.md)を参照してください。
-実際のHostを完全にcontrolする中期milestoneは未完了です。
+Host packingは現在も将来もscope外です。一つのHostClaimは一つの排他的Hostを要求します。
+中期checkpointである[Host Control System v1](host-control-milestone.md)は未完了であり、現在の実装はそのfoundationに位置します。
+完成形の設計方向は[Host management direction](host-management-direction.md)を参照してください。
 
 ## Next implementation boundary
 

@@ -6,7 +6,7 @@
 ## Current documents
 
 - [Project direction](project-direction.md)
-- [Host control milestone](host-control-milestone.md)
+- [Host Control System milestone](host-control-milestone.md)
 - [Host management direction](host-management-direction.md)
 - [Cost control direction](cost-control-direction.md)
 - [Current implementation](current-implementation.md)
